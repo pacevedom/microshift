@@ -36,8 +36,8 @@ func startCNIPlugin(ctx context.Context, cfg *config.Config, kubeconfigPath stri
 			"components/ovn/common/configmap.yaml",
 		}
 		apps = []string{
-			"components/ovn/single-node/master/daemonset.yaml",
-			"components/ovn/single-node/node/daemonset.yaml",
+			// "components/ovn/single-node/master/daemonset.yaml",
+			// "components/ovn/single-node/node/daemonset.yaml",
 		}
 	)
 
