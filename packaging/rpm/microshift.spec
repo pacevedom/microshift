@@ -109,7 +109,6 @@ The microshift-selinux package provides the SELinux policy modules required by M
 %package networking
 Summary: Networking components for MicroShift
 Requires: microshift = %{version}
-Requires: openvswitch3.1
 Requires: NetworkManager
 Requires: NetworkManager-ovs
 Requires: jq
@@ -238,11 +237,6 @@ install -p -m755 packaging/greenboot/microshift-running-check.sh %{buildroot}%{_
 install -d -m755 %{buildroot}%{_sysconfdir}/greenboot/red.d
 install -p -m755 packaging/greenboot/microshift-pre-rollback.sh %{buildroot}%{_sysconfdir}/greenboot/red.d/40_microshift_pre_rollback.sh
 
-%pre networking
-
-getent group hugetlbfs >/dev/null || groupadd -r hugetlbfs
-usermod -a -G hugetlbfs openvswitch
-
 %post
 
 # This can be called only after microshift executable files are installed
@@ -273,16 +267,6 @@ fi
 %posttrans selinux
 
 %selinux_relabel_post -s %{selinuxtype}
-
-%post networking
-# setup ovs / ovsdb optimization to avoid full pre-allocation of memory
-sed -i -n -e '/^OPTIONS=/!p' -e '$aOPTIONS="--no-mlockall"' /etc/sysconfig/openvswitch
-%systemd_post microshift-ovs-init.service
-systemctl is-active --quiet NetworkManager && systemctl restart --quiet NetworkManager || true
-systemctl enable --now --quiet openvswitch || true
-
-%preun networking
-%systemd_preun microshift-ovs-init.service
 
 %preun
 
