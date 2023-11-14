@@ -211,17 +211,6 @@ install -p -m644 assets/release/release*.json %{buildroot}%{_datadir}/microshift
 mkdir -p -m755 %{buildroot}%{_datadir}/microshift/spec
 install -p -m644 cmd/generate-config/config/config-openapi-spec.json %{buildroot}%{_datadir}/microshift/spec/config-openapi-spec.json
 
-# Memory tweaks to the OpenvSwitch services
-mkdir -p -m755 %{buildroot}%{_sysconfdir}/systemd/system/ovs-vswitchd.service.d
-mkdir -p -m755 %{buildroot}%{_sysconfdir}/systemd/system/ovsdb-server.service.d
-install -p -m644 packaging/systemd/microshift-ovs-vswitchd.conf %{buildroot}%{_sysconfdir}/systemd/system/ovs-vswitchd.service.d/microshift-cpuaffinity.conf
-install -p -m644 packaging/systemd/microshift-ovsdb-server.conf %{buildroot}%{_sysconfdir}/systemd/system/ovsdb-server.service.d/microshift-cpuaffinity.conf
-
-# this script and systemd service configures openvswitch to properly operate with OVN
-install -p -m644 packaging/systemd/microshift-ovs-init.service %{buildroot}%{_unitdir}/microshift-ovs-init.service
-install -p -m755 packaging/systemd/configure-ovs.sh %{buildroot}%{_bindir}/configure-ovs.sh
-install -p -m755 packaging/systemd/configure-ovs-microshift.sh %{buildroot}%{_bindir}/configure-ovs-microshift.sh
-
 # Avoid firewalld manipulation and flushing of iptable rules,
 # this is a workaround for https://issues.redhat.com/browse/NP-641
 # It will trigger some warnings on the selinux audit log when restarting firewalld.
