@@ -185,8 +185,6 @@ install -p -m644 packaging/crio.conf.d/microshift_arm64.conf %{buildroot}%{_sysc
 install -p -m644 packaging/crio.conf.d/microshift_amd64.conf %{buildroot}%{_sysconfdir}/crio/crio.conf.d/microshift.conf
 %endif
 
-install -p -m644 packaging/crio.conf.d/microshift-ovn.conf %{buildroot}%{_sysconfdir}/crio/crio.conf.d/microshift-ovn.conf
-
 install -d -m755 %{buildroot}/%{_unitdir}
 install -p -m644 packaging/systemd/microshift.service %{buildroot}%{_unitdir}/microshift.service
 
@@ -304,15 +302,7 @@ fi
 %ghost %{_sharedstatedir}/selinux/%{selinuxtype}/active/modules/200/microshift
 
 %files networking
-%{_sysconfdir}/crio/crio.conf.d/microshift-ovn.conf
-%{_sysconfdir}/systemd/system/ovs-vswitchd.service.d/microshift-cpuaffinity.conf
-%{_sysconfdir}/systemd/system/ovsdb-server.service.d/microshift-cpuaffinity.conf
 %{_sysconfdir}/systemd/system/firewalld.service.d/firewalld-no-iptables.conf
-
-# OpensvSwitch oneshot configuration script which handles ovn-k8s gateway mode setup
-%{_unitdir}/microshift-ovs-init.service
-%{_bindir}/configure-ovs.sh
-%{_bindir}/configure-ovs-microshift.sh
 
 %files greenboot
 %{_sysconfdir}/greenboot/check/required.d/40_microshift_running_check.sh
