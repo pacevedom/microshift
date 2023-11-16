@@ -2,17 +2,17 @@ package components
 
 import (
 	"context"
-	"fmt"
-	"path/filepath"
+	// "fmt"
+	// "path/filepath"
 
-	"github.com/openshift/microshift/pkg/assets"
+	// "github.com/openshift/microshift/pkg/assets"
 	"github.com/openshift/microshift/pkg/config"
-	"github.com/openshift/microshift/pkg/config/ovn"
-	"k8s.io/klog/v2"
+	// "github.com/openshift/microshift/pkg/config/ovn"
+	// "k8s.io/klog/v2"
 )
 
 func startCNIPlugin(ctx context.Context, cfg *config.Config, kubeconfigPath string) error {
-	var (
+	/*var (
 		ns = []string{
 			"components/ovn/common/namespace.yaml",
 		}
@@ -36,8 +36,8 @@ func startCNIPlugin(ctx context.Context, cfg *config.Config, kubeconfigPath stri
 			"components/ovn/common/configmap.yaml",
 		}
 		apps = []string{
-			// "components/ovn/single-node/master/daemonset.yaml",
-			// "components/ovn/single-node/node/daemonset.yaml",
+			"components/ovn/single-node/master/daemonset.yaml",
+			"components/ovn/single-node/node/daemonset.yaml",
 		}
 	)
 
@@ -99,6 +99,6 @@ func startCNIPlugin(ctx context.Context, cfg *config.Config, kubeconfigPath stri
 	if err := assets.ApplyDaemonSets(ctx, apps, renderTemplate, renderParamsFromConfig(cfg, extraParams), kubeconfigPath); err != nil {
 		klog.Warningf("Failed to apply apps %v %v", apps, err)
 		return err
-	}
+	}*/
 	return nil
 }
