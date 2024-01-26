@@ -116,6 +116,23 @@ func (c *Config) fillDefaults() error {
 			defaultManifestDirEtcGlob,
 		},
 	}
+	c.Ingress = IngressConfig{
+		Status: StatusEnabled,
+		Policy: IngressPolicyConfig{
+			Ports: IngressPolicyPortsConfig{
+				Http: IngressPolicyPort{
+					Status: StatusEnabled,
+					Port:   80,
+				},
+				Https: IngressPolicyPort{
+					Status: StatusEnabled,
+					Port:   443,
+				},
+			},
+			Expose: []string{nodeIP},
+			Allow:  nil,
+		},
+	}
 
 	c.MultiNode.Enabled = false
 
