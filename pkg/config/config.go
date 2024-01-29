@@ -192,6 +192,19 @@ func (c *Config) incorporateUserSettings(u *Config) {
 	if u.Manifests.KustomizePaths != nil {
 		c.Manifests.KustomizePaths = u.Manifests.KustomizePaths
 	}
+
+	if len(u.Ingress.Status) != 0 {
+		c.Ingress.Status = u.Ingress.Status
+	}
+	if u.Ingress.Ports.Http != 0 {
+		c.Ingress.Ports.Http = u.Ingress.Ports.Http
+	}
+	if u.Ingress.Ports.Https != 0 {
+		c.Ingress.Ports.Https = u.Ingress.Ports.Https
+	}
+	if len(u.Ingress.Expose) != 0 {
+		c.Ingress.Expose = u.Ingress.Expose
+	}
 }
 
 // updateComputedValues examins the existing settings and converts any
