@@ -118,20 +118,11 @@ func (c *Config) fillDefaults() error {
 	}
 	c.Ingress = IngressConfig{
 		Status: StatusEnabled,
-		Policy: IngressPolicyConfig{
-			Ports: IngressPolicyPortsConfig{
-				Http: IngressPolicyPort{
-					Status: StatusEnabled,
-					Port:   80,
-				},
-				Https: IngressPolicyPort{
-					Status: StatusEnabled,
-					Port:   443,
-				},
-			},
-			Expose: []string{nodeIP},
-			Allow:  nil,
+		Ports: IngressPolicyPortsConfig{
+			Http:  80,
+			Https: 443,
 		},
+		Expose: []string{nodeIP},
 	}
 
 	c.MultiNode.Enabled = false

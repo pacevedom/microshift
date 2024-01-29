@@ -8,24 +8,14 @@ const (
 )
 
 type IngressConfig struct {
-	Status             IngressStatusEnum   `json:"status"`
-	Policy             IngressPolicyConfig `json:"policy"`
+	Status             IngressStatusEnum        `json:"status"`
+	Ports              IngressPolicyPortsConfig `json:"ports"`
+	Expose             []string                 `json:"expose"`
 	ServingCertificate []byte
 	ServingKey         []byte
 }
 
-type IngressPolicyConfig struct {
-	Ports  IngressPolicyPortsConfig `json:"ports"`
-	Expose []string                 `json:"expose"`
-	Allow  []string                 `json:"allow,omitempty"`
-}
-
 type IngressPolicyPortsConfig struct {
-	Http  IngressPolicyPort `json:"http"`
-	Https IngressPolicyPort `json:"https"`
-}
-
-type IngressPolicyPort struct {
-	Status IngressStatusEnum `json:"status"`
-	Port   uint16            `json:"port"`
+	Http  uint16 `json:"http"`
+	Https uint16 `json:"https"`
 }
