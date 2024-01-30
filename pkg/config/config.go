@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
@@ -313,6 +314,12 @@ func (c *Config) validate() error {
 		}
 	}
 
+	if len(c.Ingress.Expose) != 0 {
+		if err := validateRouterExpose(c.Ingress.Expose); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -391,4 +398,47 @@ func getDefaultRouteLinks() ([]string, error) {
 		}
 	}
 	return nicList, nil
+}
+
+func validateRouterExpose(entries []string) error {
+	nics, addresses, err := getLinksAddresses()
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if net.ParseIP(entry) != nil {
+			if !slices.Contains(addresses, entry) {
+				return fmt.Errorf("Router expose IP %s not present in the host", entry)
+			}
+		} else {
+			if !slices.Contains(nics, entry) {
+				return fmt.Errorf("Router expose NIC %s not present in the host", entry)
+			}
+		}
+	}
+	return nil
+}
+
+func getLinksAddresses() ([]string, []string, error) {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return nil, nil, err
+	}
+	interfaceAddresses, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil, nil, err
+	}
+	nics := make([]string, 0)
+	addresses := make([]string, 0)
+	for _, iface := range interfaces {
+		nics = append(nics, iface.Name)
+	}
+	for _, addr := range interfaceAddresses {
+		addrStr := addr.String()
+		if idx := strings.Index(addrStr, "/"); idx != -1 {
+			addrStr = addrStr[:idx]
+		}
+		addresses = append(addresses, addrStr)
+	}
+	return nics, addresses, nil
 }
