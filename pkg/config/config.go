@@ -17,6 +17,7 @@ import (
 
 	"github.com/apparentlymart/go-cidr/cidr"
 	"github.com/openshift/microshift/pkg/util"
+	"github.com/vishvananda/netlink"
 )
 
 const (
@@ -116,13 +117,18 @@ func (c *Config) fillDefaults() error {
 			defaultManifestDirEtcGlob,
 		},
 	}
+
+	nics, err := getDefaultRouteLinks()
+	if err != nil {
+		return fmt.Errorf("failed to determine default routes: %v", err)
+	}
 	c.Ingress = IngressConfig{
 		Status: StatusEnabled,
 		Ports: IngressPolicyPortsConfig{
 			Http:  80,
 			Https: 443,
 		},
-		Expose: []string{nodeIP},
+		Expose: nics,
 	}
 
 	c.MultiNode.Enabled = false
@@ -361,4 +367,28 @@ func checkAdvertiseAddressConfigured(advertiseAddress string) error {
 		}
 	}
 	return fmt.Errorf("Advertise address: %s not present in any interface", advertiseAddress)
+}
+
+func getDefaultRouteLinks() ([]string, error) {
+	nicList := make([]string, 0)
+	handler, err := netlink.NewHandle(netlink.FAMILY_ALL)
+	if err != nil {
+		return nicList, err
+	}
+	linkList, err := handler.LinkList()
+	if err != nil {
+		return nicList, err
+	}
+	for _, link := range linkList {
+		routes, err := handler.RouteList(link, netlink.FAMILY_ALL)
+		if err != nil {
+			return nicList, err
+		}
+		for _, route := range routes {
+			if route.Dst == nil {
+				nicList = append(nicList, link.Attrs().Name)
+			}
+		}
+	}
+	return nicList, nil
 }
