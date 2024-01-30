@@ -22,13 +22,15 @@ var templateFuncs = map[string]interface{}{
 
 func renderParamsFromConfig(cfg *config.Config, extra assets.RenderParams) assets.RenderParams {
 	params := map[string]interface{}{
-		"ReleaseImage": release.Image,
-		"NodeName":     cfg.CanonicalNodeName(),
-		"NodeIP":       cfg.Node.NodeIP,
-		"ClusterCIDR":  cfg.Network.ClusterNetwork[0],
-		"ServiceCIDR":  cfg.Network.ServiceNetwork[0],
-		"ClusterDNS":   cfg.Network.DNS,
-		"BaseDomain":   cfg.DNS.BaseDomain,
+		"ReleaseImage":    release.Image,
+		"NodeName":        cfg.CanonicalNodeName(),
+		"NodeIP":          cfg.Node.NodeIP,
+		"ClusterCIDR":     cfg.Network.ClusterNetwork[0],
+		"ServiceCIDR":     cfg.Network.ServiceNetwork[0],
+		"ClusterDNS":      cfg.Network.DNS,
+		"BaseDomain":      cfg.DNS.BaseDomain,
+		"RouterHttpPort":  cfg.Ingress.Ports.Http,
+		"RouterHttpsPort": cfg.Ingress.Ports.Https,
 	}
 	for k, v := range extra {
 		params[k] = v

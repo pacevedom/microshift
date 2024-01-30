@@ -16,6 +16,6 @@ type IngressConfig struct {
 }
 
 type IngressPolicyPortsConfig struct {
-	Http  uint16 `json:"http"`
-	Https uint16 `json:"https"`
+	Http  int `json:"http"`
+	Https int `json:"https"`
 }

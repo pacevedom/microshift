@@ -123,6 +123,7 @@ func startIngressController(ctx context.Context, cfg *config.Config, kubeconfigP
 		}
 		svc = []string{
 			"components/openshift-router/service-internal.yaml",
+			"components/openshift-router/service-cloud.yaml",
 		}
 		cm                   = "components/openshift-router/configmap.yaml"
 		servingKeypairSecret = "components/openshift-router/serving-certificate.yaml"
@@ -158,7 +159,7 @@ func startIngressController(ctx context.Context, cfg *config.Config, kubeconfigP
 		klog.Warningf("Failed to apply configMap %v: %v", cm, err)
 		return err
 	}
-	if err := assets.ApplyServices(ctx, svc, nil, nil, kubeconfigPath); err != nil {
+	if err := assets.ApplyServices(ctx, svc, renderTemplate, renderParamsFromConfig(cfg, nil), kubeconfigPath); err != nil {
 		klog.Warningf("Failed to apply service %v %v", svc, err)
 		return err
 	}
