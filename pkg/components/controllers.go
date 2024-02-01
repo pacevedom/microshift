@@ -192,8 +192,10 @@ func startIngressController(ctx context.Context, cfg *config.Config, kubeconfigP
 		klog.Warningf("failed to apply secret %q: %v", servingKeypairSecret, err)
 		return err
 	}
-
-	if err := assets.ApplyDeployments(ctx, apps, renderTemplate, renderParamsFromConfig(cfg, nil), kubeconfigPath); err != nil {
+	extraParams := assets.RenderParams{
+		"RouterNamespaceOwnership": cfg.Ingress.AdmissionPolicy.NamespaceOwnership == config.NamespaceOwnershipAllowed,
+	}
+	if err := assets.ApplyDeployments(ctx, apps, renderTemplate, renderParamsFromConfig(cfg, extraParams), kubeconfigPath); err != nil {
 		klog.Warningf("Failed to apply apps %v: %v", apps, err)
 		return err
 	}
