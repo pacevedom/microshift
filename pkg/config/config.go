@@ -125,6 +125,9 @@ func (c *Config) fillDefaults() error {
 			Https: 443,
 		},
 		Expose: []string{nodeIP},
+		AdmissionPolicy: RouteAdmissionPolicy{
+			NamespaceOwnership: NamespaceOwnershipAllowed,
+		},
 	}
 
 	c.MultiNode.Enabled = false
@@ -206,6 +209,9 @@ func (c *Config) incorporateUserSettings(u *Config) {
 	}
 	if len(u.Ingress.Expose) != 0 {
 		c.Ingress.Expose = u.Ingress.Expose
+	}
+	if u.Ingress.AdmissionPolicy.NamespaceOwnership != "" {
+		c.Ingress.AdmissionPolicy.NamespaceOwnership = u.Ingress.AdmissionPolicy.NamespaceOwnership
 	}
 }
 

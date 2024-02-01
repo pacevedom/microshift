@@ -1,16 +1,20 @@
 package config
 
 type IngressStatusEnum string
+type NamespaceOwnershipEnum string
 
 const (
-	StatusEnabled  = "Enabled"
-	StatusDisabled = "Disabled"
+	StatusEnabled             = "Enabled"
+	StatusDisabled            = "Disabled"
+	NamespaceOwnershipStrict  = "Strict"
+	NamespaceOwnershipAllowed = "InterNamespaceAllowed"
 )
 
 type IngressConfig struct {
 	Status             IngressStatusEnum        `json:"status"`
 	Ports              IngressPolicyPortsConfig `json:"ports"`
 	Expose             []string                 `json:"expose"`
+	AdmissionPolicy    RouteAdmissionPolicy     `json:"routeAdmissionPolicy"`
 	ServingCertificate []byte
 	ServingKey         []byte
 }
@@ -18,4 +22,8 @@ type IngressConfig struct {
 type IngressPolicyPortsConfig struct {
 	Http  int `json:"http"`
 	Https int `json:"https"`
+}
+
+type RouteAdmissionPolicy struct {
+	NamespaceOwnership NamespaceOwnershipEnum `json:"namespaceOwnership"`
 }
