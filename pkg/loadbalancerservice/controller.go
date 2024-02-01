@@ -3,6 +3,8 @@ package loadbalancerservice
 import (
 	"context"
 	"fmt"
+	"net"
+	"slices"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -20,23 +22,36 @@ import (
 	"github.com/openshift/microshift/pkg/servicemanager"
 )
 
-const defaultInformerResyncPeriod = 10 * time.Minute
+const defaultInformerResyncPeriod = 30 * time.Second
 
 type LoadbalancerServiceController struct {
-	NodeIP     string
-	KubeConfig string
-	client     *kubernetes.Clientset
-	indexer    cache.Indexer
-	queue      workqueue.RateLimitingInterface
-	informer   cache.SharedIndexInformer
+	routerIPAddresses []string
+	routerHostnames   []string
+	NodeIP            string
+	KubeConfig        string
+	client            *kubernetes.Clientset
+	indexer           cache.Indexer
+	queue             workqueue.RateLimitingInterface
+	informer          cache.SharedIndexInformer
 }
 
 var _ servicemanager.Service = &LoadbalancerServiceController{}
 
 func NewLoadbalancerServiceController(cfg *config.Config) *LoadbalancerServiceController {
+	ipAddresses := make([]string, 0)
+	hostnames := make([]string, 0)
+	for _, entry := range cfg.Ingress.Expose {
+		if net.ParseIP(entry) != nil {
+			ipAddresses = append(ipAddresses, entry)
+		} else {
+			hostnames = append(hostnames, entry)
+		}
+	}
 	return &LoadbalancerServiceController{
-		NodeIP:     cfg.Node.NodeIP,
-		KubeConfig: cfg.KubeConfigPath(config.KubeAdmin),
+		routerIPAddresses: ipAddresses,
+		routerHostnames:   hostnames,
+		NodeIP:            cfg.Node.NodeIP,
+		KubeConfig:        cfg.KubeConfigPath(config.KubeAdmin),
 	}
 }
 
@@ -193,10 +208,46 @@ func (c *LoadbalancerServiceController) getNewStatus(svc *corev1.Service) (*core
 		}
 	}
 
-	newStatus.Ingress = append(newStatus.Ingress, corev1.LoadBalancerIngress{
-		IP: c.NodeIP,
-	})
+	ipList, err := c.getLoadBalancerIngressIPs(svc.Name)
+	if err != nil {
+		return newStatus, fmt.Errorf("unable to retrieve ip addresses for service: %v", err)
+	}
+	for _, ip := range ipList {
+		newStatus.Ingress = append(newStatus.Ingress, corev1.LoadBalancerIngress{
+			IP: ip,
+		})
+	}
+
 	return newStatus, nil
+}
+
+func (c *LoadbalancerServiceController) getLoadBalancerIngressIPs(name string) ([]string, error) {
+	ipList := make([]string, 0)
+	if name == "router-default" {
+		configuredAddresses, err := config.GetConfiguredAddresses()
+		if err != nil {
+			return ipList, fmt.Errorf("unable to get configured IPs in the host: %v", err)
+		}
+		for _, ip := range c.routerIPAddresses {
+			if slices.Contains(configuredAddresses, ip) {
+				ipList = append(ipList, ip)
+			} else {
+				klog.Warningf("router expose IP %v is not configured in the host", ip)
+			}
+		}
+		for _, hostname := range c.routerHostnames {
+			ips, err := net.LookupIP(hostname)
+			if err != nil {
+				return ipList, fmt.Errorf("unable to get IPs for %v: %v", hostname, err)
+			}
+			for _, ip := range ips {
+				ipList = append(ipList, ip.String())
+			}
+		}
+	} else {
+		ipList = append(ipList, c.NodeIP)
+	}
+	return ipList, nil
 }
 
 func (c *LoadbalancerServiceController) patchStatus(svc *corev1.Service, newStatus *corev1.LoadBalancerStatus) error {

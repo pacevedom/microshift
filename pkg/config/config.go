@@ -18,7 +18,6 @@ import (
 
 	"github.com/apparentlymart/go-cidr/cidr"
 	"github.com/openshift/microshift/pkg/util"
-	"github.com/vishvananda/netlink"
 )
 
 const (
@@ -119,17 +118,13 @@ func (c *Config) fillDefaults() error {
 		},
 	}
 
-	nics, err := getDefaultRouteLinks()
-	if err != nil {
-		return fmt.Errorf("failed to determine default routes: %v", err)
-	}
 	c.Ingress = IngressConfig{
 		Status: StatusEnabled,
 		Ports: IngressPolicyPortsConfig{
 			Http:  80,
 			Https: 443,
 		},
-		Expose: nics,
+		Expose: []string{nodeIP},
 	}
 
 	c.MultiNode.Enabled = false
@@ -376,32 +371,8 @@ func checkAdvertiseAddressConfigured(advertiseAddress string) error {
 	return fmt.Errorf("Advertise address: %s not present in any interface", advertiseAddress)
 }
 
-func getDefaultRouteLinks() ([]string, error) {
-	nicList := make([]string, 0)
-	handler, err := netlink.NewHandle(netlink.FAMILY_ALL)
-	if err != nil {
-		return nicList, err
-	}
-	linkList, err := handler.LinkList()
-	if err != nil {
-		return nicList, err
-	}
-	for _, link := range linkList {
-		routes, err := handler.RouteList(link, netlink.FAMILY_ALL)
-		if err != nil {
-			return nicList, err
-		}
-		for _, route := range routes {
-			if route.Dst == nil {
-				nicList = append(nicList, link.Attrs().Name)
-			}
-		}
-	}
-	return nicList, nil
-}
-
 func validateRouterExpose(entries []string) error {
-	nics, addresses, err := getLinksAddresses()
+	addresses, err := GetConfiguredAddresses()
 	if err != nil {
 		return err
 	}
@@ -410,29 +381,17 @@ func validateRouterExpose(entries []string) error {
 			if !slices.Contains(addresses, entry) {
 				return fmt.Errorf("Router expose IP %s not present in the host", entry)
 			}
-		} else {
-			if !slices.Contains(nics, entry) {
-				return fmt.Errorf("Router expose NIC %s not present in the host", entry)
-			}
 		}
 	}
 	return nil
 }
 
-func getLinksAddresses() ([]string, []string, error) {
-	interfaces, err := net.Interfaces()
-	if err != nil {
-		return nil, nil, err
-	}
+func GetConfiguredAddresses() ([]string, error) {
 	interfaceAddresses, err := net.InterfaceAddrs()
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	nics := make([]string, 0)
 	addresses := make([]string, 0)
-	for _, iface := range interfaces {
-		nics = append(nics, iface.Name)
-	}
 	for _, addr := range interfaceAddresses {
 		addrStr := addr.String()
 		if idx := strings.Index(addrStr, "/"); idx != -1 {
@@ -440,5 +399,5 @@ func getLinksAddresses() ([]string, []string, error) {
 		}
 		addresses = append(addresses, addrStr)
 	}
-	return nics, addresses, nil
+	return addresses, nil
 }
