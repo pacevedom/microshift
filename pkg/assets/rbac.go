@@ -109,6 +109,33 @@ func (cr *clusterRoleApplier) Handle(ctx context.Context) error {
 	return err
 }
 
+type clusterRoleDeleter struct {
+	client *kubernetes.Clientset
+	cr     *rbacv1.ClusterRole
+}
+
+func (cr *clusterRoleDeleter) New(kubeconfigPath string) {
+	restConfig, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
+	if err != nil {
+		panic(err)
+	}
+
+	cr.client = kubernetes.NewForConfigOrDie(rest.AddUserAgent(restConfig, "rbac-agent"))
+}
+
+func (cr *clusterRoleDeleter) Read(objBytes []byte, _ RenderFunc, _ RenderParams) {
+	obj, err := runtime.Decode(rbacCodecs.UniversalDecoder(rbacv1.SchemeGroupVersion), objBytes)
+	if err != nil {
+		panic(err)
+	}
+	cr.cr = obj.(*rbacv1.ClusterRole)
+}
+
+func (cr *clusterRoleDeleter) Handle(ctx context.Context) error {
+	_, _, err := resourceapply.DeleteClusterRole(ctx, cr.client.RbacV1(), assetsEventRecorder, cr.cr)
+	return err
+}
+
 type roleBindingApplier struct {
 	client *kubernetes.Clientset
 	rb     *rbacv1.RoleBinding
@@ -200,6 +227,13 @@ func ApplyClusterRoles(ctx context.Context, rbacs []string, kubeconfigPath strin
 	cr.New(kubeconfigPath)
 	return handleRbac(ctx, rbacs, cr)
 }
+
+func DeleteClusterRoles(ctx context.Context, rbacs []string, kubeconfigPath string) error {
+	cr := &clusterRoleDeleter{}
+	cr.New(kubeconfigPath)
+	return handleRbac(ctx, rbacs, cr)
+}
+
 func ApplyRoleBindings(ctx context.Context, rbacs []string, kubeconfigPath string) error {
 	rb := &roleBindingApplier{}
 	rb.New(kubeconfigPath)
