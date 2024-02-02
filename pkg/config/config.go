@@ -315,6 +315,17 @@ func (c *Config) validate() error {
 		}
 	}
 
+	switch c.Ingress.Status {
+	case StatusDisabled, StatusEnabled:
+	default:
+		return fmt.Errorf("ingress.status invalid value: %v", c.Ingress.Status)
+	}
+	switch c.Ingress.AdmissionPolicy.NamespaceOwnership {
+	case NamespaceOwnershipAllowed, NamespaceOwnershipStrict:
+	default:
+		return fmt.Errorf("ingress.routeAdmissionPolicy.namespaceOwnership invalid value: %v", c.Ingress.AdmissionPolicy.NamespaceOwnership)
+	}
+
 	if len(c.Ingress.Expose) != 0 {
 		if err := validateRouterExpose(c.Ingress.Expose); err != nil {
 			return err
