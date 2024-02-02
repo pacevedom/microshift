@@ -14,12 +14,20 @@ Test Tags           slow
 
 
 *** Variables ***
+${ALTERNATIVE_HTTP_PORT}    8000
+${ALTERNATIVE_HTTPS_PORT}    9000
 ${HOSTNAME}                 hello-microshift.cluster.local
 ${ROUTER_DISABLED}          SEPARATOR=\n
 ...                     ---
 ...                     ingress:
 ...                     \ \ status: Disabled
-
+${ROUTER_CUSTOM_PORTS}    SEPARATOR=\n
+...                     ---
+...                     ingress:
+...                     \ \ status: Enabled
+...                     \ \ ports:
+...                     \ \ \ \ http: ${ALTERNATIVE_HTTP_PORT}
+...                     \ \ \ \ https: ${ALTERNATIVE_HTTPS_PORT}
 
 *** Test Cases ***
 Router Default Configuration
@@ -51,6 +59,25 @@ Router Disable
     Run With Kubeconfig    oc wait --for=delete namespace/openshift-ingress --timeout=60s
 
     [Teardown]    Run Keywords
+    ...    Restore Default MicroShift Config
+    ...    Restart MicroShift
+
+Router Listen Custom Ports
+    [Documentation]    Change default listening ports in the router and check they work.
+    [Setup]    Run Keywords
+    ...    Save Default MicroShift Config
+    ...    Change Listening Ports
+    ...    Create Hello MicroShift Pod
+    ...    Expose Hello MicroShift Service Via Route
+    ...    Restart Router
+
+    Wait Until Keyword Succeeds    10x    6s
+    ...    Access Hello Microshift    ${ALTERNATIVE_HTTP_PORT}
+
+    [Teardown]    Run Keywords
+    ...    Delete Hello MicroShift Route
+    ...    Delete Hello MicroShift Pod And Service
+    ...    Wait For Service Deletion With Timeout
     ...    Restore Default MicroShift Config
     ...    Restart MicroShift
 
@@ -89,6 +116,10 @@ Network APIs With Test Label Are Gone
 Disable Router
     [Documentation]    Disable router
     Setup With Custom Config    ${ROUTER_DISABLED}
+
+Change Listening Ports
+    [Documentation]    Enable router and change the default listening ports
+    Setup With Custom Config    ${ROUTER_CUSTOM_PORTS}
 
 Setup With Custom Config
     [Documentation]    Install a custom config and restart MicroShift
