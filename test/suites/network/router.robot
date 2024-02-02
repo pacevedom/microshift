@@ -14,8 +14,12 @@ Test Tags           slow
 
 
 *** Variables ***
-${HELLO_USHIFT_INGRESS}     ./assets/hello-microshift-ingress.yaml
 ${HOSTNAME}                 hello-microshift.cluster.local
+${ROUTER_DISABLED}          SEPARATOR=\n
+...                     ---
+...                     ingress:
+...                     \ \ status: Disabled
+
 
 *** Test Cases ***
 Router Default Configuration
@@ -35,6 +39,18 @@ Router Default Configuration
     ...    Delete Hello MicroShift Route
     ...    Delete Hello MicroShift Pod And Service
     ...    Wait For Service Deletion With Timeout
+    ...    Restore Default MicroShift Config
+    ...    Restart MicroShift
+
+Router Disable
+    [Documentation]    Disable the router and check the namespace does not exist.
+    [Setup]    Run Keywords
+    ...    Save Default MicroShift Config
+    ...    Disable Router
+
+    Run With Kubeconfig    oc wait --for=delete namespace/openshift-ingress --timeout=60s
+
+    [Teardown]    Run Keywords
     ...    Restore Default MicroShift Config
     ...    Restart MicroShift
 
@@ -69,3 +85,14 @@ Network APIs With Test Label Are Gone
     ${match_string}=    Remove String    ${match_string}    "
     ${response}=    Run With Kubeconfig    oc get svc,ep -l app\=hello-microshift -n ${NAMESPACE}
     Should Be Equal As Strings    ${match_string}    ${response}    strip_spaces=True
+
+Disable Router
+    [Documentation]    Disable router
+    Setup With Custom Config    ${ROUTER_DISABLED}
+
+Setup With Custom Config
+    [Documentation]    Install a custom config and restart MicroShift
+    [Arguments]    ${config_content}
+    ${merged}=    Extend MicroShift Config    ${config_content}
+    Upload MicroShift Config    ${merged}
+    Restart MicroShift
