@@ -18,11 +18,19 @@ import (
 
 	"github.com/apparentlymart/go-cidr/cidr"
 	"github.com/openshift/microshift/pkg/util"
+	"github.com/vishvananda/netlink"
 )
 
 const (
 	// default DNS resolve file when systemd-resolved is used
 	DefaultSystemdResolvedFile = "/run/systemd/resolve/resolv.conf"
+)
+
+var (
+	forbiddenCIDRs = []string{
+		"127.0.0.0/8",
+		"169.254.0.0/16",
+	}
 )
 
 type Config struct {
@@ -124,7 +132,6 @@ func (c *Config) fillDefaults() error {
 			Http:  80,
 			Https: 443,
 		},
-		Expose: []string{nodeIP},
 		AdmissionPolicy: RouteAdmissionPolicy{
 			NamespaceOwnership: NamespaceOwnershipAllowed,
 		},
@@ -250,6 +257,21 @@ func (c *Config) updateComputedValues() error {
 		c.ApiServer.AdvertiseAddress = firstValidIP.String()
 	}
 
+	if len(c.Ingress.Expose) == 0 {
+		// If the expose is not configured we need to include all of the host addresses
+		// to preserve previous behavior. However, if the apiserver advertise address has
+		// not been configured, it will do so in a later stage and we also need to
+		// include it here.
+		addresses, err := GetConfiguredAddresses()
+		if err != nil {
+			return fmt.Errorf("unable to compute configured addresses: %v", err)
+		}
+		if !c.ApiServer.SkipInterface {
+			addresses = append(addresses, c.ApiServer.AdvertiseAddress)
+		}
+		c.Ingress.Expose = addresses
+	}
+
 	c.computeLoggingSetting()
 
 	return nil
@@ -327,7 +349,7 @@ func (c *Config) validate() error {
 	}
 
 	if len(c.Ingress.Expose) != 0 {
-		if err := validateRouterExpose(c.Ingress.Expose); err != nil {
+		if err := validateRouterExpose(c.Ingress.Expose, c.ApiServer.AdvertiseAddress, c.ApiServer.SkipInterface); err != nil {
 			return err
 		}
 	}
@@ -388,33 +410,84 @@ func checkAdvertiseAddressConfigured(advertiseAddress string) error {
 	return fmt.Errorf("Advertise address: %s not present in any interface", advertiseAddress)
 }
 
-func validateRouterExpose(entries []string) error {
+func validateRouterExpose(entries []string, advertiseAddress string, skipInterface bool) error {
 	addresses, err := GetConfiguredAddresses()
 	if err != nil {
 		return err
 	}
 	for _, entry := range entries {
 		if net.ParseIP(entry) != nil {
-			if !slices.Contains(addresses, entry) {
-				return fmt.Errorf("Router expose IP %s not present in the host", entry)
+			if entry == advertiseAddress && !skipInterface {
+				continue
 			}
+			if !slices.Contains(addresses, entry) {
+				return fmt.Errorf("Router expose IP %v not present in the host", entry)
+			}
+		} else {
+			return fmt.Errorf("Router expose IP %v bad format", entry)
 		}
 	}
 	return nil
 }
 
-func GetConfiguredAddresses() ([]string, error) {
-	interfaceAddresses, err := net.InterfaceAddrs()
+func getBannedIPs() ([]*net.IPNet, error) {
+	banned := make([]*net.IPNet, 0)
+	for _, entry := range forbiddenCIDRs {
+		_, netIP, err := net.ParseCIDR(entry)
+		if err != nil {
+			return nil, err
+		}
+		banned = append(banned, netIP)
+	}
+	return banned, nil
+}
+
+func getHostAddresses() ([]net.IP, error) {
+	handle, err := netlink.NewHandle()
 	if err != nil {
 		return nil, err
 	}
-	addresses := make([]string, 0)
-	for _, addr := range interfaceAddresses {
-		addrStr := addr.String()
-		if idx := strings.Index(addrStr, "/"); idx != -1 {
-			addrStr = addrStr[:idx]
+	links, err := handle.LinkList()
+	if err != nil {
+		return nil, err
+	}
+	addresses := make([]net.IP, 0)
+	for _, link := range links {
+		if link.Attrs().ParentIndex != 0 || link.Attrs().MasterIndex != 0 {
+			continue
 		}
-		addresses = append(addresses, addrStr)
+		addressList, err := handle.AddrList(link, netlink.FAMILY_V4)
+		if err != nil {
+			return nil, err
+		}
+		for _, addr := range addressList {
+			addresses = append(addresses, addr.IP)
+		}
 	}
 	return addresses, nil
+}
+
+func GetConfiguredAddresses() ([]string, error) {
+	bannedAddresses, err := getBannedIPs()
+	if err != nil {
+		return nil, err
+	}
+	hostAddresses, err := getHostAddresses()
+	if err != nil {
+		return nil, err
+	}
+	addressList := make([]string, 0)
+	for _, addr := range hostAddresses {
+		skip := false
+		for _, banned := range bannedAddresses {
+			if banned.Contains(addr) {
+				skip = true
+			}
+		}
+		if skip {
+			continue
+		}
+		addressList = append(addressList, addr.String())
+	}
+	return addressList, nil
 }
