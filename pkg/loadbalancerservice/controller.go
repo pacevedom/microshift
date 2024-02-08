@@ -27,6 +27,7 @@ const defaultInformerResyncPeriod = 30 * time.Second
 type LoadbalancerServiceController struct {
 	routerIPAddresses []string
 	routerHostnames   []string
+	routerInterfaces  []string
 	NodeIP            string
 	KubeConfig        string
 	client            *kubernetes.Clientset
@@ -38,18 +39,10 @@ type LoadbalancerServiceController struct {
 var _ servicemanager.Service = &LoadbalancerServiceController{}
 
 func NewLoadbalancerServiceController(cfg *config.Config) *LoadbalancerServiceController {
-	ipAddresses := make([]string, 0)
-	hostnames := make([]string, 0)
-	for _, entry := range cfg.Ingress.Expose {
-		if net.ParseIP(entry) != nil {
-			ipAddresses = append(ipAddresses, entry)
-		} else {
-			hostnames = append(hostnames, entry)
-		}
-	}
 	return &LoadbalancerServiceController{
-		routerIPAddresses: ipAddresses,
-		routerHostnames:   hostnames,
+		routerIPAddresses: cfg.Ingress.Expose.IPAddresses,
+		routerHostnames:   cfg.Ingress.Expose.Hostnames,
+		routerInterfaces:  cfg.Ingress.Expose.Interfaces,
 		NodeIP:            cfg.Node.NodeIP,
 		KubeConfig:        cfg.KubeConfigPath(config.KubeAdmin),
 	}
@@ -212,10 +205,11 @@ func (c *LoadbalancerServiceController) getNewStatus(svc *corev1.Service) (*core
 	if err != nil {
 		return newStatus, fmt.Errorf("unable to retrieve ip addresses for service: %v", err)
 	}
-	for _, ip := range ipList {
-		newStatus.Ingress = append(newStatus.Ingress, corev1.LoadBalancerIngress{
+	newStatus.Ingress = make([]corev1.LoadBalancerIngress, len(ipList))
+	for i, ip := range ipList {
+		newStatus.Ingress[i] = corev1.LoadBalancerIngress{
 			IP: ip,
-		})
+		}
 	}
 
 	return newStatus, nil
@@ -231,18 +225,27 @@ func (c *LoadbalancerServiceController) getLoadBalancerIngressIPs(name string) (
 		for _, ip := range c.routerIPAddresses {
 			if slices.Contains(configuredAddresses, ip) {
 				ipList = append(ipList, ip)
-			} else {
-				klog.Warningf("router expose IP %v is not configured in the host", ip)
+				continue
 			}
+			klog.Warningf("router expose IP %v is not configured in the host", ip)
 		}
 		for _, hostname := range c.routerHostnames {
 			ips, err := net.LookupIP(hostname)
 			if err != nil {
-				return ipList, fmt.Errorf("unable to get IPs for %v: %v", hostname, err)
+				klog.Warningf("unable to get IPs for hostname %v: %v", hostname, err)
+				continue
 			}
 			for _, ip := range ips {
 				ipList = append(ipList, ip.String())
 			}
+		}
+		for _, nic := range c.routerInterfaces {
+			addrs, err := getIpAddressesFromNicName(nic)
+			if err != nil {
+				klog.Warningf("unable to get IPs for interface %v: %v", nic, err)
+				continue
+			}
+			ipList = append(ipList, addrs...)
 		}
 	} else {
 		ipList = append(ipList, c.NodeIP)
@@ -259,4 +262,22 @@ func (c *LoadbalancerServiceController) patchStatus(svc *corev1.Service, newStat
 	_, err := helpers.PatchService(c.client.CoreV1(), svc, updated)
 
 	return err
+}
+
+func getIpAddressesFromNicName(name string) ([]string, error) {
+	iface, err := net.InterfaceByName(name)
+	if err != nil {
+		return nil, err
+	}
+	addrs, err := iface.Addrs()
+	if err != nil {
+		return nil, err
+	}
+	addrList := make([]string, 0)
+	for _, addr := range addrs {
+		if ipv4 := addr.(*net.IPNet).IP.To4(); ipv4 != nil {
+			addrList = append(addrList, ipv4.String())
+		}
+	}
+	return addrList, nil
 }

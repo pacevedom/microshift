@@ -214,8 +214,14 @@ func (c *Config) incorporateUserSettings(u *Config) {
 	if u.Ingress.Ports.Https != 0 {
 		c.Ingress.Ports.Https = u.Ingress.Ports.Https
 	}
-	if len(u.Ingress.Expose) != 0 {
-		c.Ingress.Expose = u.Ingress.Expose
+	if len(u.Ingress.Expose.Hostnames) != 0 {
+		c.Ingress.Expose.Hostnames = u.Ingress.Expose.Hostnames
+	}
+	if len(u.Ingress.Expose.Interfaces) != 0 {
+		c.Ingress.Expose.Interfaces = u.Ingress.Expose.Interfaces
+	}
+	if len(u.Ingress.Expose.IPAddresses) != 0 {
+		c.Ingress.Expose.IPAddresses = u.Ingress.Expose.IPAddresses
 	}
 	if u.Ingress.AdmissionPolicy.NamespaceOwnership != "" {
 		c.Ingress.AdmissionPolicy.NamespaceOwnership = u.Ingress.AdmissionPolicy.NamespaceOwnership
@@ -257,7 +263,9 @@ func (c *Config) updateComputedValues() error {
 		c.ApiServer.AdvertiseAddress = firstValidIP.String()
 	}
 
-	if len(c.Ingress.Expose) == 0 {
+	if len(c.Ingress.Expose.Hostnames) == 0 &&
+		len(c.Ingress.Expose.Interfaces) == 0 &&
+		len(c.Ingress.Expose.IPAddresses) == 0 {
 		// If the expose is not configured we need to include all of the host addresses
 		// to preserve previous behavior. However, if the apiserver advertise address has
 		// not been configured, it will do so in a later stage and we also need to
@@ -269,7 +277,7 @@ func (c *Config) updateComputedValues() error {
 		if !c.ApiServer.SkipInterface {
 			addresses = append(addresses, c.ApiServer.AdvertiseAddress)
 		}
-		c.Ingress.Expose = addresses
+		c.Ingress.Expose.IPAddresses = addresses
 	}
 
 	c.computeLoggingSetting()
@@ -348,8 +356,13 @@ func (c *Config) validate() error {
 		return fmt.Errorf("ingress.routeAdmissionPolicy.namespaceOwnership invalid value: %v", c.Ingress.AdmissionPolicy.NamespaceOwnership)
 	}
 
-	if len(c.Ingress.Expose) != 0 {
-		if err := validateRouterExpose(c.Ingress.Expose, c.ApiServer.AdvertiseAddress, c.ApiServer.SkipInterface); err != nil {
+	if len(c.Ingress.Expose.IPAddresses) != 0 {
+		if err := validateRouterExposeIPAddresses(c.Ingress.Expose.IPAddresses, c.ApiServer.AdvertiseAddress, c.ApiServer.SkipInterface); err != nil {
+			return err
+		}
+	}
+	if len(c.Ingress.Expose.Interfaces) != 0 {
+		if err := validateRouterExposeInterfaces(c.Ingress.Expose.Interfaces); err != nil {
 			return err
 		}
 	}
@@ -410,7 +423,7 @@ func checkAdvertiseAddressConfigured(advertiseAddress string) error {
 	return fmt.Errorf("Advertise address: %s not present in any interface", advertiseAddress)
 }
 
-func validateRouterExpose(entries []string, advertiseAddress string, skipInterface bool) error {
+func validateRouterExposeIPAddresses(entries []string, advertiseAddress string, skipInterface bool) error {
 	addresses, err := GetConfiguredAddresses()
 	if err != nil {
 		return err
@@ -425,6 +438,23 @@ func validateRouterExpose(entries []string, advertiseAddress string, skipInterfa
 			}
 		} else {
 			return fmt.Errorf("Router expose IP %v bad format", entry)
+		}
+	}
+	return nil
+}
+
+func validateRouterExposeInterfaces(entries []string) error {
+	interfaceList, err := net.Interfaces()
+	if err != nil {
+		return err
+	}
+	interfaceNames := make([]string, len(interfaceList), len(interfaceList))
+	for i, iface := range interfaceList {
+		interfaceNames[i] = iface.Name
+	}
+	for _, entry := range entries {
+		if !slices.Contains(interfaceNames, entry) {
+			return fmt.Errorf("interface %v not found in the host", entry)
 		}
 	}
 	return nil

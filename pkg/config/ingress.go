@@ -13,7 +13,7 @@ const (
 type IngressConfig struct {
 	Status             IngressStatusEnum        `json:"status"`
 	Ports              IngressPolicyPortsConfig `json:"ports"`
-	Expose             []string                 `json:"expose"`
+	Expose             ExposeConfig             `json:"expose"`
 	AdmissionPolicy    RouteAdmissionPolicy     `json:"routeAdmissionPolicy"`
 	ServingCertificate []byte
 	ServingKey         []byte
@@ -26,4 +26,10 @@ type IngressPolicyPortsConfig struct {
 
 type RouteAdmissionPolicy struct {
 	NamespaceOwnership NamespaceOwnershipEnum `json:"namespaceOwnership"`
+}
+
+type ExposeConfig struct {
+	Hostnames   []string `json:"hostnames"`
+	Interfaces  []string `json:"interfaces"`
+	IPAddresses []string `json:"ipAddresses"`
 }
