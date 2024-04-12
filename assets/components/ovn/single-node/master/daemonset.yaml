@@ -324,6 +324,7 @@ spec:
           gateway_mode_flags="--gateway-mode local --gateway-interface br-ex"
 
           sysctl net.ipv4.ip_forward=1
+          sysctl net.ipv6.conf.all.forwarding=1
 
           gw_interface_flag=
           # if br-ex1 is configured on the node, we want to use it for external gateway traffic
@@ -399,7 +400,7 @@ spec:
             memory: 60Mi
         env:
         - name: OVN_KUBE_LOG_LEVEL
-          value: "4"
+          value: "8"
         - name: K8S_NODE
           valueFrom:
             fieldRef:

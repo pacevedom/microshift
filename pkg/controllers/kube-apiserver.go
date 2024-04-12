@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -187,8 +188,8 @@ func (s *KubeAPIServer) configure(cfg *config.Config) error {
 			// IP in the certificates when having more than one node is not possible due to apiserver SNI
 			// limitations. For this, we prefer using names and IPs as a fallback, supporting both single
 			// and multi node.
-			"kubelet-preferred-address-types": {"Hostname", "InternalIP"},
-
+			"kubelet-preferred-address-types":  {"Hostname", "InternalIP"},
+			"service-cluster-ip-range":         {strings.Join(cfg.Network.ServiceNetwork, ",")},
 			"proxy-client-cert-file":           {cryptomaterial.ClientCertPath(aggregatorClientCertDir)},
 			"proxy-client-key-file":            {cryptomaterial.ClientKeyPath(aggregatorClientCertDir)},
 			"requestheader-client-ca-file":     {aggregatorCAPath},
@@ -250,7 +251,7 @@ func (s *KubeAPIServer) configure(cfg *config.Config) error {
 		ServiceAccountPublicKeyFiles: []string{
 			filepath.Join(config.DataDir, "/resources/kube-apiserver/secrets/service-account-key/service-account.pub"),
 		},
-		ServicesSubnet:        cfg.Network.ServiceNetwork[0],
+		// ServicesSubnet:        cfg.Network.ServiceNetwork[0],
 		ServicesNodePortRange: cfg.Network.ServiceNodePortRange,
 	}
 

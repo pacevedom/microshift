@@ -190,7 +190,7 @@ func selectV4IPFromHostInterface(nodeIP string) (string, error) {
 			if err != nil {
 				return "", fmt.Errorf("unable to parse CIDR for interface %q: %s", i.Name, err)
 			}
-			if ip.To4() == nil || ip.IsLoopback() {
+			if /*ip.To4() == nil ||*/ ip.IsLoopback() {
 				// ignore IPv6 and loopback addresses
 				continue
 			}
