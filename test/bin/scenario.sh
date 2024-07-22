@@ -243,7 +243,7 @@ prepare_kickstart() {
             # The main kickstart file name is hardcoded to kickstart.ks
             output_file="${output_dir}/kickstart.ks"
         fi
-
+#TODO hostname for the mirror does not work. use the bridge ip instead.
         sed -e "s|REPLACE_LVM_SYSROOT_SIZE|${LVM_SYSROOT_SIZE}|g" \
             -e "s|REPLACE_OSTREE_SERVER_URL|${WEB_SERVER_URL}/repo|g" \
             -e "s|REPLACE_BOOTC_REGISTRY_URL|${BOOTC_REGISTRY_URL}|g" \
@@ -257,6 +257,7 @@ prepare_kickstart() {
             -e "s|REPLACE_FIPS_ENABLED|${fips_enabled}|g" \
             -e "s|REPLACE_ENABLE_MIRROR|${ENABLE_REGISTRY_MIRROR}|g" \
             -e "s|REPLACE_MIRROR_HOSTNAME|${hostname}|g" \
+            -e "s|REPLACE_VM_BRIDGE_IP|${VM_BRIDGE_IP}|g" \
             "${ifile}" > "${output_file}"
     done
     record_junit "${vmname}" "prepare_kickstart" "OK"

@@ -13,6 +13,10 @@ version = "*"
 name = "iproute-tc"
 version = "*"
 
+[[packages]]
+name = "tcpdump"
+version = "*"
+
 [customizations.services]
 enabled = ["microshift-test-agent"]
 

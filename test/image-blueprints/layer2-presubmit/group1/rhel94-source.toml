@@ -29,6 +29,14 @@ version = "*"
 name = "systemd-resolved"
 version = "*"
 
+[[packages]]
+name = "tcpdump"
+version = "*"
+
+[[packages]]
+name = "bind-utils"
+version = "*"
+
 [customizations.services]
 enabled = ["microshift", "microshift-test-agent"]
 
