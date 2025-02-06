@@ -23,6 +23,7 @@ import (
 
 	"github.com/openshift/microshift/pkg/config"
 	"github.com/openshift/microshift/pkg/telemetry"
+	"k8s.io/klog/v2"
 	_ "k8s.io/klog/v2"
 )
 
@@ -52,9 +53,14 @@ func (t *TelemetryManager) Run(ctx context.Context, ready chan<- struct{}, stopp
 	if err != nil {
 		return fmt.Errorf("unable to get pull secret: %v", err)
 	}
-	_ = telemetry.NewTelemetry(clusterId, pullSecret)
+	telemeter := telemetry.NewTelemetry(clusterId, pullSecret)
 	go func() {
-		//TODO
+		err := telemeter.Send(ctx, nil)
+		if err != nil {
+			klog.Infof("unable to send metrics: %v", err)
+		} else {
+			klog.Infof("metrics sent successfully")
+		}
 	}()
 	return ctx.Err()
 }
