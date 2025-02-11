@@ -30,8 +30,7 @@ import (
 )
 
 const (
-	authString        = `{"authorization_token": "%s", "cluster_id": "%s"}`
-	telemetryEndpoint = "https://infogw.api.openshift.com/metrics/v1/receive"
+	authString = `{"authorization_token": "%s", "cluster_id": "%s"}`
 )
 
 type Metric struct {
@@ -52,13 +51,15 @@ type MetricSample struct {
 
 type Telemetry struct {
 	encodedAuth string
+	endpoint    string
 }
 
-func NewTelemetry(clusterId, pullSecret string) *Telemetry {
+func NewTelemetry(baseURL, clusterId, pullSecret string) *Telemetry {
 	authString := fmt.Sprintf(authString, pullSecret, clusterId)
 	encodedAuth := base64.StdEncoding.EncodeToString([]byte(authString))
 	return &Telemetry{
 		encodedAuth: encodedAuth,
+		endpoint:    fmt.Sprintf("%s/metrics/v1/receive", baseURL),
 	}
 }
 
@@ -70,7 +71,7 @@ func (t *Telemetry) Send(ctx context.Context, metrics []Metric) error {
 	}
 	compressed := snappy.Encode(nil, data)
 	reader := bytes.NewReader(compressed)
-	req, err := http.NewRequestWithContext(ctx, "POST", telemetryEndpoint, reader)
+	req, err := http.NewRequestWithContext(ctx, "POST", t.endpoint, reader)
 	if err != nil {
 		return fmt.Errorf("unable to create request: %v", err)
 	}

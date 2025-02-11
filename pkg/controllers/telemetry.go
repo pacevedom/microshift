@@ -24,7 +24,6 @@ import (
 	"github.com/openshift/microshift/pkg/config"
 	"github.com/openshift/microshift/pkg/telemetry"
 	"k8s.io/klog/v2"
-	_ "k8s.io/klog/v2"
 )
 
 type TelemetryManager struct {
@@ -53,7 +52,7 @@ func (t *TelemetryManager) Run(ctx context.Context, ready chan<- struct{}, stopp
 	if err != nil {
 		return fmt.Errorf("unable to get pull secret: %v", err)
 	}
-	telemeter := telemetry.NewTelemetry(clusterId, pullSecret)
+	telemeter := telemetry.NewTelemetry(t.config.Telemetry.Endpoint, clusterId, pullSecret)
 	go func() {
 		err := telemeter.Send(ctx, nil)
 		if err != nil {
