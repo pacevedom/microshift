@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/openshift/microshift/pkg/config"
 	"github.com/openshift/microshift/pkg/telemetry"
@@ -43,7 +44,7 @@ func (t *TelemetryManager) Dependencies() []string {
 
 func (t *TelemetryManager) Run(ctx context.Context, ready chan<- struct{}, stopped chan<- struct{}) error {
 	defer close(stopped)
-	defer close(ready)
+
 	clusterId, err := getClusterId()
 	if err != nil {
 		return fmt.Errorf("unable to get cluster id: %v", err)
@@ -52,16 +53,33 @@ func (t *TelemetryManager) Run(ctx context.Context, ready chan<- struct{}, stopp
 	if err != nil {
 		return fmt.Errorf("unable to get pull secret: %v", err)
 	}
-	telemeter := telemetry.NewTelemetry(t.config.Telemetry.Endpoint, clusterId, pullSecret)
+
+	panicChannel := make(chan any, 1)
 	go func() {
-		err := telemeter.Send(ctx, nil)
-		if err != nil {
-			klog.Infof("unable to send metrics: %v", err)
-		} else {
-			klog.Infof("metrics sent successfully")
+		defer func() {
+			if r := recover(); r != nil {
+				panicChannel <- r
+			}
+		}()
+	}()
+
+	close(ready)
+
+	_ = telemetry.NewTelemetry(t.config.Telemetry.Endpoint, clusterId, pullSecret)
+	go func() {
+		klog.Infof("metrics collected and sent. Waiting for next collection")
+		for {
+			select {
+			case <-ctx.Done():
+				klog.Infof("collect and send for the last time")
+				return
+			case <-time.After(time.Hour):
+				klog.Infof("collect and send again")
+			}
 		}
 	}()
-	return ctx.Err()
+	perr := <-panicChannel
+	panic(perr)
 }
 
 func getClusterId() (string, error) {
