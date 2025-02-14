@@ -34,19 +34,15 @@ const (
 )
 
 type Metric struct {
-	Name    string         `json:"name"`
-	Labels  []MetricLabel  `json:"labels"`
-	Samples []MetricSample `json:"samples"`
+	Name      string        `json:"name"`
+	Labels    []MetricLabel `json:"labels"`
+	Timestamp int64         `json:"timestamp"`
+	Value     float64       `json:"value"`
 }
 
 type MetricLabel struct {
 	Name  string `json:"name"`
 	Value string `json:"value"`
-}
-
-type MetricSample struct {
-	Timestamp int64   `json:"timestamp"`
-	Value     float64 `json:"value"`
 }
 
 type Telemetry struct {
@@ -71,6 +67,7 @@ func (t *Telemetry) Send(ctx context.Context, metrics []Metric) error {
 	}
 	compressed := snappy.Encode(nil, data)
 	reader := bytes.NewReader(compressed)
+
 	req, err := http.NewRequestWithContext(ctx, "POST", t.endpoint, reader)
 	if err != nil {
 		return fmt.Errorf("unable to create request: %v", err)
@@ -104,6 +101,10 @@ func (t *Telemetry) Send(ctx context.Context, metrics []Metric) error {
 	return fmt.Errorf("request not successful. Status code %v. Body %v", resp.StatusCode, string(body))
 }
 
+func (t *Telemetry) CollectMetrics() ([]Metric, error) {
+	return nil, nil
+}
+
 func convertMetricsToWriteRequest(metrics []Metric) *prompb.WriteRequest {
 	var timeSeriesList []prompb.TimeSeries
 	var metricMetadataList []prompb.MetricMetadata
@@ -117,12 +118,11 @@ func convertMetricsToWriteRequest(metrics []Metric) *prompb.WriteRequest {
 				Value: label.Value,
 			})
 		}
-		samples := []prompb.Sample{}
-		for _, sample := range metric.Samples {
-			samples = append(samples, prompb.Sample{
-				Value:     sample.Value,
-				Timestamp: sample.Timestamp,
-			})
+		samples := []prompb.Sample{
+			prompb.Sample{
+				Value:     metric.Value,
+				Timestamp: metric.Timestamp,
+			},
 		}
 
 		timeSeriesList = append(timeSeriesList, prompb.TimeSeries{
