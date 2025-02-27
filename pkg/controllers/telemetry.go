@@ -65,9 +65,13 @@ func (t *TelemetryManager) Run(ctx context.Context, ready chan<- struct{}, stopp
 
 	close(ready)
 
-	_ = telemetry.NewTelemetry(t.config.Telemetry.Endpoint, clusterId, pullSecret)
+	client := telemetry.NewTelemetry(t.config.Telemetry.Endpoint, clusterId, pullSecret)
 	go func() {
-		klog.Infof("metrics collected and sent. Waiting for next collection")
+		_, err := client.CollectMetrics(t.config)
+		if err != nil {
+			klog.Errorf("failed to fetch kubelet metrics: %v", err)
+		}
+		// klog.Infof("metrics fetched: %v", metrics)
 		for {
 			select {
 			case <-ctx.Done():
