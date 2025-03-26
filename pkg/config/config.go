@@ -62,7 +62,7 @@ type Config struct {
 	// Internal-only fields
 	userSettings *Config `json:"-"` // the values read from the config file
 
-	MultiNode MultiNodeConfig `json:"-"` // the value read from commond line
+	MultiNode MultiNodeConfig `json:"-"` // the values read from command line
 
 	Warnings []string `json:"-"` // Warnings that should not prevent the service from starting.
 }

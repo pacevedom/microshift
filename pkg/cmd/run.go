@@ -52,10 +52,22 @@ func NewRunMicroshiftCommand() *cobra.Command {
 	}
 
 	var multinode bool
+	var bootstrapKubeConfig string
+	var kubeletOnly bool
 
 	flags := cmd.Flags()
 	flags.BoolVar(&multinode, "multinode", false, "enable multinode mode")
+	flags.StringVar(&bootstrapKubeConfig, "bootstrapkubeconfig", "", "multinode bootstrap kubeconfig")
+	flags.BoolVar(&kubeletOnly, "kubelet", false, "enable kubelet-only mode")
 	err := flags.MarkHidden("multinode")
+	if err != nil {
+		panic(err)
+	}
+	err = flags.MarkHidden("bootstrapkubeconfig")
+	if err != nil {
+		panic(err)
+	}
+	err = flags.MarkHidden("kubelet")
 	if err != nil {
 		panic(err)
 	}
@@ -63,6 +75,7 @@ func NewRunMicroshiftCommand() *cobra.Command {
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		versionInfo := version.Get()
 		klog.InfoS("Version", "microshift", versionInfo.String(), "base", release.Base)
+		klog.Infof("Multinode %v. Kubelet only %v. Bootstrap kubeconfig %q", multinode, kubeletOnly, bootstrapKubeConfig)
 
 		cfg, err := config.ActiveConfig()
 		if err != nil {
@@ -77,7 +90,7 @@ func NewRunMicroshiftCommand() *cobra.Command {
 			}
 		}
 
-		cfg = config.ConfigMultiNode(cfg, multinode)
+		cfg = config.ConfigMultiNode(cfg, multinode, kubeletOnly, bootstrapKubeConfig)
 
 		for _, w := range cfg.Warnings {
 			klog.Warningf("Configuration warning: %s", w)
@@ -197,24 +210,28 @@ func RunMicroshift(cfg *config.Config) error {
 	runCtx, runCancel := context.WithCancel(context.Background())
 	m := servicemanager.NewServiceManager(startRec)
 	util.Must(m.AddService(node.NewNetworkConfiguration(cfg)))
-	util.Must(m.AddService(controllers.NewEtcd(cfg)))
-	util.Must(m.AddService(sysconfwatch.NewSysConfWatchController(cfg)))
-	util.Must(m.AddService(controllers.NewKubeAPIServer(cfg)))
-	util.Must(m.AddService(controllers.NewKubeScheduler(cfg)))
-	util.Must(m.AddService(controllers.NewKubeControllerManager(runCtx, cfg)))
-	util.Must(m.AddService(controllers.NewOpenShiftCRDManager(cfg)))
-	util.Must(m.AddService(controllers.NewRouteControllerManager(cfg)))
-	util.Must(m.AddService(controllers.NewOpenShiftDefaultSCCManager(cfg)))
-	util.Must(m.AddService(mdns.NewMicroShiftmDNSController(cfg)))
-	util.Must(m.AddService(controllers.NewInfrastructureServices(cfg)))
-	util.Must(m.AddService(controllers.NewClusterPolicyController(cfg)))
-	util.Must(m.AddService(controllers.NewVersionManager(cfg)))
-	util.Must(m.AddService(kustomize.NewKustomizer(cfg)))
-	util.Must(m.AddService(node.NewKubeletServer(cfg)))
-	util.Must(m.AddService(loadbalancerservice.NewLoadbalancerServiceController(cfg)))
-	util.Must(m.AddService(controllers.NewKubeStorageVersionMigrator(cfg)))
-	util.Must(m.AddService(controllers.NewClusterID(cfg)))
-	util.Must(m.AddService(controllers.NewTelemetryManager(cfg)))
+	if cfg.MultiNode.Kubelet {
+		util.Must(m.AddService(node.NewKubeletServer(cfg)))
+	} else {
+		util.Must(m.AddService(controllers.NewEtcd(cfg)))
+		util.Must(m.AddService(sysconfwatch.NewSysConfWatchController(cfg)))
+		util.Must(m.AddService(controllers.NewKubeAPIServer(cfg)))
+		util.Must(m.AddService(controllers.NewKubeScheduler(cfg)))
+		util.Must(m.AddService(controllers.NewKubeControllerManager(runCtx, cfg)))
+		util.Must(m.AddService(controllers.NewOpenShiftCRDManager(cfg)))
+		util.Must(m.AddService(controllers.NewRouteControllerManager(cfg)))
+		util.Must(m.AddService(controllers.NewOpenShiftDefaultSCCManager(cfg)))
+		util.Must(m.AddService(mdns.NewMicroShiftmDNSController(cfg)))
+		util.Must(m.AddService(controllers.NewInfrastructureServices(cfg)))
+		util.Must(m.AddService(controllers.NewClusterPolicyController(cfg)))
+		util.Must(m.AddService(controllers.NewVersionManager(cfg)))
+		util.Must(m.AddService(kustomize.NewKustomizer(cfg)))
+		util.Must(m.AddService(node.NewKubeletServer(cfg)))
+		util.Must(m.AddService(loadbalancerservice.NewLoadbalancerServiceController(cfg)))
+		util.Must(m.AddService(controllers.NewKubeStorageVersionMigrator(cfg)))
+		util.Must(m.AddService(controllers.NewClusterID(cfg)))
+		util.Must(m.AddService(controllers.NewTelemetryManager(cfg)))
+	}
 
 	// Storing and clearing the env, so other components don't send the READY=1 until MicroShift is fully ready
 	notifySocket := os.Getenv("NOTIFY_SOCKET")

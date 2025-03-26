@@ -499,17 +499,19 @@ func initKubeconfigs(
 		return err
 	}
 
-	kubeletCertPEM, kubeletKeyPEM, err := certChains.GetCertKey("kubelet-signer", "kube-csr-signer", "kubelet-client")
-	if err != nil {
-		return err
-	}
-	if err := util.KubeConfigWithClientCerts(
-		cfg.KubeConfigPath(config.Kubelet),
-		cfg.ApiServer.URL,
-		internalTrustPEM,
-		kubeletCertPEM, kubeletKeyPEM,
-	); err != nil {
-		return err
+	if !cfg.MultiNode.Kubelet {
+		kubeletCertPEM, kubeletKeyPEM, err := certChains.GetCertKey("kubelet-signer", "kube-csr-signer", "kubelet-client")
+		if err != nil {
+			return err
+		}
+		if err := util.KubeConfigWithClientCerts(
+			cfg.KubeConfigPath(config.Kubelet),
+			cfg.ApiServer.URL,
+			internalTrustPEM,
+			kubeletCertPEM, kubeletKeyPEM,
+		); err != nil {
+			return err
+		}
 	}
 	clusterPolicyControllerCertPEM, clusterPolicyControllerKeyPEM, err := certChains.GetCertKey("kube-control-plane-signer", "cluster-policy-controller")
 	if err != nil {

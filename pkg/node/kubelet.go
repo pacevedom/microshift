@@ -59,8 +59,13 @@ func NewKubeletServer(cfg *config.Config) *KubeletServer {
 	return s
 }
 
-func (s *KubeletServer) Name() string           { return componentKubelet }
-func (s *KubeletServer) Dependencies() []string { return []string{"kube-apiserver"} }
+func (s *KubeletServer) Name() string { return componentKubelet }
+func (s *KubeletServer) Dependencies() []string {
+	if s.kubeletflags.KubeConfig != s.kubeletflags.BootstrapKubeconfig {
+		return nil
+	}
+	return []string{"kube-apiserver"}
+}
 
 func (s *KubeletServer) configure(cfg *config.Config) {
 	if err := s.writeConfig(cfg); err != nil {
@@ -75,17 +80,27 @@ func (s *KubeletServer) configure(cfg *config.Config) {
 	if len(cfg.Node.NodeIPV6) != 0 {
 		nodeIP = fmt.Sprintf("%s,%s", nodeIP, cfg.Node.NodeIPV6)
 	}
+
 	kubeletFlags := kubeletoptions.NewKubeletFlags()
-	kubeletFlags.BootstrapKubeconfig = cfg.KubeConfigPath(config.Kubelet)
-	kubeletFlags.KubeConfig = cfg.KubeConfigPath(config.Kubelet)
 	kubeletFlags.RuntimeCgroups = "/system.slice/crio.service"
 	kubeletFlags.HostnameOverride = cfg.Node.HostnameOverride
 	kubeletFlags.NodeIP = nodeIP
-	kubeletFlags.NodeLabels["node-role.kubernetes.io/control-plane"] = ""
-	kubeletFlags.NodeLabels["node-role.kubernetes.io/master"] = ""
 	kubeletFlags.NodeLabels["node-role.kubernetes.io/worker"] = ""
 	kubeletFlags.NodeLabels["node.openshift.io/os_id"] = osID
 	kubeletFlags.NodeLabels["node.kubernetes.io/instance-type"] = "rhde"
+	kubeletFlags.KubeConfig = cfg.KubeConfigPath(config.Kubelet)
+
+	if cfg.MultiNode.Kubelet {
+		kubeletFlags.BootstrapKubeconfig = cfg.MultiNode.KubeConfig
+		certsDir := cryptomaterial.CertsDirectory(config.DataDir)
+		servingCertDir := cryptomaterial.KubeletServingCertDir(certsDir)
+		kubeletFlags.CertDirectory = servingCertDir
+		copyKubeconfigMultinode(cfg.MultiNode.KubeConfig, cfg.KubeConfigPath("kubeadmin"))
+	} else {
+		kubeletFlags.BootstrapKubeconfig = cfg.KubeConfigPath(config.Kubelet)
+		kubeletFlags.NodeLabels["node-role.kubernetes.io/control-plane"] = ""
+		kubeletFlags.NodeLabels["node-role.kubernetes.io/master"] = ""
+	}
 
 	kubeletConfig, err := loadConfigFile(filepath.Join(config.DataDir, "/resources/kubelet/config/config.yaml"))
 
@@ -151,7 +166,9 @@ func (s *KubeletServer) generateConfig(cfg *config.Config) ([]byte, error) {
 		"tlsCipherSuites":    strings.Join(cfg.ApiServer.TLS.CipherSuites, ","),
 		"tlsMinVersion":      cfg.ApiServer.TLS.MinVersion,
 		"userProvidedConfig": userProvidedConfig,
+		"multiNodeJoin":      fmt.Sprintf("%v", cfg.MultiNode.Join),
 	}
+	klog.Infof("kubelet config: %v", tplParams)
 
 	var data bytes.Buffer
 	if err := tpl.Execute(&data, tplParams); err != nil {
@@ -177,6 +194,26 @@ func (s *KubeletServer) Run(ctx context.Context, ready chan<- struct{}, stopped 
 
 	errc := make(chan error)
 
+	//TODO offload this to a separate function
+	// sourceFile := kubeletServer.KubeletFlags.BootstrapKubeconfig
+	// destinationFile := "/var/lib/microshift/resources/kubeadmin/kubeconfig" //TODO use the constant.
+
+	// input, err := os.ReadFile(sourceFile)
+	// if err != nil {
+	// 	klog.Errorf("Failed to read source file %s: %v", sourceFile, err)
+	// 	return err
+	// }
+	// if err := os.MkdirAll(filepath.Dir(destinationFile), os.FileMode(0700)); err != nil {
+	// 	klog.Errorf("Failed to create directory for destination file %s: %v", destinationFile, err)
+	// 	return err
+	// }
+	// if err := os.WriteFile(destinationFile, input, 0600); err != nil {
+	// 	klog.Errorf("Failed to write to destination file %s: %v", destinationFile, err)
+	// 	return err
+	// }
+
+	// klog.Infof("Successfully copied %s to %s", sourceFile, destinationFile)
+
 	// Run healthcheck probe and kubelet in parallel.
 	// No matter which ends first - if it ends with an error,
 	// it'll cause ServiceManager to trigger graceful shutdown.
@@ -192,6 +229,41 @@ func (s *KubeletServer) Run(ctx context.Context, ready chan<- struct{}, stopped 
 			return
 		}
 		klog.Infof("%s is ready", s.Name())
+		//TODO some checks may be needed here. can i approve csr's for myself?
+		// Approve pending CSRs
+		// clientset, err := util.GetClientSet()
+		// if err != nil {
+		// 	klog.Errorf("Failed to get Kubernetes clientset: %v", err)
+		// 	errc <- err
+		// 	return
+		// }
+
+		// csrList, err := clientset.CertificatesV1().CertificateSigningRequests().List(ctx, metav1.ListOptions{})
+		// if err != nil {
+		// 	klog.Errorf("Failed to list CSRs: %v", err)
+		// 	errc <- err
+		// 	return
+		// }
+
+		// for _, csr := range csrList.Items {
+		// 	if csr.Status.Conditions == nil {
+		// 		csr.Status.Conditions = append(csr.Status.Conditions, certv1.CertificateSigningRequestCondition{
+		// 			Type:           certv1.CertificateApproved,
+		// 			Status:         corev1.ConditionTrue,
+		// 			Reason:         "AutoApproved",
+		// 			Message:        "This CSR was automatically approved by MicroShift",
+		// 			LastUpdateTime: metav1.Now(),
+		// 		})
+
+		// 		_, err := clientset.CertificatesV1().CertificateSigningRequests().UpdateApproval(ctx, csr.Name, &csr, metav1.UpdateOptions{})
+		// 		if err != nil {
+		// 			klog.Errorf("Failed to approve CSR %s: %v", csr.Name, err)
+		// 			errc <- err
+		// 			return
+		// 		}
+		// 		klog.Infof("Approved CSR %s", csr.Name)
+		// 	}
+		// }
 		close(ready)
 	}()
 
@@ -250,4 +322,21 @@ func loadOSID() (string, error) {
 		}
 	}
 	return "", fmt.Errorf("OS ID not found")
+}
+
+func copyKubeconfigMultinode(source, destination string) error {
+	input, err := os.ReadFile(source)
+	if err != nil {
+		klog.Errorf("Failed to read source file %s: %v", source, err)
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(destination), os.FileMode(0700)); err != nil {
+		klog.Errorf("Failed to create directory for destination file %s: %v", destination, err)
+		return err
+	}
+	if err := os.WriteFile(destination, input, 0600); err != nil {
+		klog.Errorf("Failed to write to destination file %s: %v", destination, err)
+		return err
+	}
+	return nil
 }

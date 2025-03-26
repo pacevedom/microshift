@@ -52,6 +52,10 @@ func (n *NetworkConfiguration) Dependencies() []string { return []string{} }
 func (n *NetworkConfiguration) configure(cfg *config.Config) {
 	n.kasAdvertiseAddresses = cfg.ApiServer.AdvertiseAddresses
 	n.skipInterfaceConfiguration = cfg.ApiServer.SkipInterface
+	if cfg.MultiNode.Enabled {
+		n.kasAdvertiseAddresses = []string{"10.44.0.0"}
+		n.skipInterfaceConfiguration = false
+	}
 }
 
 func (n *NetworkConfiguration) Run(ctx context.Context, ready chan<- struct{}, stopped chan<- struct{}) error {

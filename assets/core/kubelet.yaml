@@ -18,18 +18,26 @@ featureGates:
   APIPriorityAndFairness: true
   DownwardAPIHugePages: true
   PodSecurity: true
-  RotateKubeletServerCertificate: false # TODO
+{{- if eq .multiNodeJoin "true" }}
+  RotateKubeletServerCertificate: true
+{{- end }}
 kubeAPIBurst: 100
 kubeAPIQPS: 50
 maxPods: 250
 nodeStatusReportFrequency: 5m
-rotateCertificates: false # TODO
+rotateCertificates: true
 serializeImagePulls: false
-serverTLSBootstrap: false # TODO
+{{- if eq .multiNodeJoin "true" }}
+serverTLSBootstrap: true
+{{- else }}
+serverTLSBootstrap: false
+{{- end }}
+{{- if eq .multiNodeJoin "false" }}
 tlsCertFile: "{{ .tlsCertFile }}"
+tlsPrivateKeyFile: "{{ .tlsPrivateKeyFile }}"
+{{- end }}
 tlsCipherSuites: [{{ .tlsCipherSuites }}]
 tlsMinVersion: "{{ .tlsMinVersion }}"
-tlsPrivateKeyFile: "{{ .tlsPrivateKeyFile }}"
 volumePluginDir: "{{ .volumePluginDir }}"
 {{- if .resolvConf }}
 resolvConf: "{{ .resolvConf }}"
