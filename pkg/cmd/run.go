@@ -53,21 +53,27 @@ func NewRunMicroshiftCommand() *cobra.Command {
 
 	var multinode bool
 	var bootstrapKubeConfig string
-	var kubeletOnly bool
+	var etcdCACert string
+	var etcdCAKey string
 
 	flags := cmd.Flags()
 	flags.BoolVar(&multinode, "multinode", false, "enable multinode mode")
-	flags.StringVar(&bootstrapKubeConfig, "bootstrapkubeconfig", "", "multinode bootstrap kubeconfig")
-	flags.BoolVar(&kubeletOnly, "kubelet", false, "enable kubelet-only mode")
+	flags.StringVar(&bootstrapKubeConfig, "bootstrap-kubeconfig", "", "multinode bootstrap kubeconfig")
+	flags.StringVar(&etcdCACert, "etcd-ca-cert", "", "path to the etcd CA certificate")
+	flags.StringVar(&etcdCAKey, "etcd-ca-key", "", "path to the etcd CA key")
 	err := flags.MarkHidden("multinode")
 	if err != nil {
 		panic(err)
 	}
-	err = flags.MarkHidden("bootstrapkubeconfig")
+	err = flags.MarkHidden("bootstrap-kubeconfig")
 	if err != nil {
 		panic(err)
 	}
-	err = flags.MarkHidden("kubelet")
+	err = flags.MarkHidden("etcd-ca-cert")
+	if err != nil {
+		panic(err)
+	}
+	err = flags.MarkHidden("etcd-ca-key")
 	if err != nil {
 		panic(err)
 	}
@@ -75,7 +81,6 @@ func NewRunMicroshiftCommand() *cobra.Command {
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		versionInfo := version.Get()
 		klog.InfoS("Version", "microshift", versionInfo.String(), "base", release.Base)
-		klog.Infof("Multinode %v. Kubelet only %v. Bootstrap kubeconfig %q", multinode, kubeletOnly, bootstrapKubeConfig)
 
 		cfg, err := config.ActiveConfig()
 		if err != nil {
@@ -90,7 +95,7 @@ func NewRunMicroshiftCommand() *cobra.Command {
 			}
 		}
 
-		cfg = config.ConfigMultiNode(cfg, multinode, kubeletOnly, bootstrapKubeConfig)
+		cfg = config.ConfigMultiNode(cfg, multinode, bootstrapKubeConfig, etcdCACert, etcdCAKey)
 
 		for _, w := range cfg.Warnings {
 			klog.Warningf("Configuration warning: %s", w)
@@ -206,12 +211,28 @@ func RunMicroshift(cfg *config.Config) error {
 		klog.Fatalf("failed to create the necessary kubeconfigs for internal components: %v", err)
 	}
 
+	klog.Infof("and regenerate all multinode stuff")
+	config.UpdateMultiNode(cfg)
+
 	// Establish the context we will use to control execution
 	runCtx, runCancel := context.WithCancel(context.Background())
 	m := servicemanager.NewServiceManager(startRec)
 	util.Must(m.AddService(node.NewNetworkConfiguration(cfg)))
-	if cfg.MultiNode.Kubelet {
+	if cfg.MultiNode.Join {
+		util.Must(m.AddService(controllers.NewEtcd(cfg)))
+		util.Must(m.AddService(controllers.NewKubeAPIServer(cfg)))
+		util.Must(m.AddService(controllers.NewKubeScheduler(cfg)))
+		util.Must(m.AddService(controllers.NewKubeControllerManager(runCtx, cfg)))
+		util.Must(m.AddService(controllers.NewOpenShiftCRDManager(cfg)))
+		util.Must(m.AddService(controllers.NewRouteControllerManager(cfg)))
+		util.Must(m.AddService(controllers.NewOpenShiftDefaultSCCManager(cfg)))
+		util.Must(m.AddService(mdns.NewMicroShiftmDNSController(cfg)))
+		util.Must(m.AddService(controllers.NewInfrastructureServices(cfg)))
+		util.Must(m.AddService(controllers.NewClusterPolicyController(cfg)))
+		// util.Must(m.AddService(controllers.NewVersionManager(cfg)))
+		// util.Must(m.AddService(kustomize.NewKustomizer(cfg)))
 		util.Must(m.AddService(node.NewKubeletServer(cfg)))
+		// util.Must(m.AddService(loadbalancerservice.NewLoadbalancerServiceController(cfg)))
 	} else {
 		util.Must(m.AddService(controllers.NewEtcd(cfg)))
 		util.Must(m.AddService(sysconfwatch.NewSysConfWatchController(cfg)))

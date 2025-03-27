@@ -39,11 +39,13 @@ var (
 
 type EtcdService struct {
 	memoryLimit uint64
+	multinode   bool
 }
 
 func NewEtcd(cfg *config.Config) *EtcdService {
 	return &EtcdService{
 		memoryLimit: cfg.Etcd.MemoryLimitMB,
+		multinode:   cfg.MultiNode.Join,
 	}
 }
 
@@ -52,6 +54,7 @@ func (s *EtcdService) Dependencies() []string { return []string{} }
 
 func (s *EtcdService) Run(ctx context.Context, ready chan<- struct{}, stopped chan<- struct{}) error {
 	defer close(stopped)
+	//TODO if multinode i need to signal it to etcd.
 
 	// Check to see if we should run as a systemd run or directly as a binary.
 	runningAsSvc := os.Getenv("INVOCATION_ID") != ""
@@ -95,6 +98,9 @@ func (s *EtcdService) Run(ctx context.Context, ready chan<- struct{}, stopped ch
 		exe = etcdPath
 	}
 	args = append(args, "run")
+	if s.multinode {
+		args = append(args, "--multinode")
+	}
 	// Not using context as canceling ctx sends SIGKILL to process
 	klog.Infof("starting etcd via %s with args %v", exe, args)
 	cmd := exec.Command(exe, args...)
@@ -191,11 +197,11 @@ func checkIfEtcdIsReady(ctx context.Context) error {
 
 func getEtcdClient(ctx context.Context) (*clientv3.Client, error) {
 	certsDir := cryptomaterial.CertsDirectory(config.DataDir)
-	etcdAPIServerClientCertDir := cryptomaterial.EtcdAPIServerClientCertDir(certsDir)
+	etcdPeerClientCertDir := cryptomaterial.EtcdPeerCertDir(certsDir)
 
 	tlsInfo := transport.TLSInfo{
-		CertFile:      cryptomaterial.ClientCertPath(etcdAPIServerClientCertDir),
-		KeyFile:       cryptomaterial.ClientKeyPath(etcdAPIServerClientCertDir),
+		CertFile:      cryptomaterial.PeerCertPath(etcdPeerClientCertDir),
+		KeyFile:       cryptomaterial.PeerKeyPath(etcdPeerClientCertDir),
 		TrustedCAFile: cryptomaterial.CACertPath(cryptomaterial.EtcdSignerDir(certsDir)),
 	}
 	tlsConfig, err := tlsInfo.ClientConfig()

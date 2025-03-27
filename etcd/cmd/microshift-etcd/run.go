@@ -17,6 +17,8 @@ import (
 	"github.com/openshift/microshift/pkg/util/cryptomaterial"
 
 	"github.com/spf13/cobra"
+	"go.etcd.io/etcd/client/pkg/v3/transport"
+	clientv3 "go.etcd.io/etcd/client/v3"
 	etcd "go.etcd.io/etcd/server/v3/embed"
 	"go.etcd.io/etcd/server/v3/mvcc/backend"
 	"k8s.io/klog/v2"
@@ -25,15 +27,22 @@ import (
 func NewRunEtcdCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use: "run",
-		RunE: func(cmd *cobra.Command, args []string) (err error) {
-			cfg, err := config.ActiveConfig()
-			if err != nil {
-				klog.Fatalf("Error in reading and validating MicroShift config: %v", err)
-			}
+	}
+	var multinode bool
+	flags := cmd.Flags()
+	flags.BoolVar(&multinode, "multinode", false, "enable multinode mode")
+	err := flags.MarkHidden("multinode")
+	if err != nil {
+		panic(err)
+	}
+	cmd.RunE = func(cmd *cobra.Command, args []string) (err error) {
+		cfg, err := config.ActiveConfig()
+		if err != nil {
+			klog.Fatalf("Error in reading and validating MicroShift config: %v", err)
+		}
 
-			e := NewEtcd(cfg)
-			return e.Run()
-		},
+		e := NewEtcd(cfg, multinode)
+		return e.Run()
 	}
 
 	return cmd
@@ -44,10 +53,13 @@ type EtcdService struct {
 	minDefragBytes          int64
 	maxFragmentedPercentage float64
 	defragCheckFreq         time.Duration
+	multinode               bool
 }
 
-func NewEtcd(cfg *config.Config) *EtcdService {
-	s := &EtcdService{}
+func NewEtcd(cfg *config.Config, multinode bool) *EtcdService {
+	s := &EtcdService{
+		multinode: multinode,
+	}
 	s.configure(cfg)
 	return s
 }
@@ -73,16 +85,14 @@ func (s *EtcdService) configure(cfg *config.Config) {
 	s.etcdCfg.Logger = "zap"
 	s.etcdCfg.Dir = dataDir
 	s.etcdCfg.QuotaBackendBytes = cfg.Etcd.QuotaBackendBytes
-	url2380 := setURL([]string{"localhost"}, "2380")
-	url2379 := setURL([]string{"localhost"}, "2379")
-	s.etcdCfg.AdvertisePeerUrls = url2380
-	s.etcdCfg.ListenPeerUrls = url2380
-	s.etcdCfg.AdvertiseClientUrls = url2379
-	s.etcdCfg.ListenClientUrls = url2379
-	s.etcdCfg.ListenMetricsUrls = setURL([]string{"localhost"}, "2381")
+	s.etcdCfg.AdvertisePeerUrls = setURL([]string{cfg.Node.NodeIP}, "2380")
+	s.etcdCfg.ListenPeerUrls = setURL([]string{"0.0.0.0"}, "2380")
+	s.etcdCfg.AdvertiseClientUrls = setURL([]string{cfg.Node.NodeIP}, "2379")
+	s.etcdCfg.ListenClientUrls = setURL([]string{"0.0.0.0"}, "2379")
+	// s.etcdCfg.ListenMetricsUrls = setURL([]string{cfg.Node.NodeIP}, "2381")
 
 	s.etcdCfg.Name = cfg.Node.HostnameOverride
-	s.etcdCfg.InitialCluster = fmt.Sprintf("%s=https://%s:2380", cfg.Node.HostnameOverride, "localhost")
+	s.etcdCfg.InitialCluster = fmt.Sprintf("%s=https://%s:2380", cfg.Node.HostnameOverride, cfg.Node.NodeIP)
 
 	s.etcdCfg.TlsMinVersion = getTLSMinVersion(cfg.ApiServer.TLS.MinVersion)
 	if cfg.ApiServer.TLS.MinVersion != string(configv1.VersionTLS13) {
@@ -95,6 +105,60 @@ func (s *EtcdService) configure(cfg *config.Config) {
 	s.etcdCfg.PeerTLSInfo.CertFile = cryptomaterial.PeerCertPath(etcdPeerCertDir)
 	s.etcdCfg.PeerTLSInfo.KeyFile = cryptomaterial.PeerKeyPath(etcdPeerCertDir)
 	s.etcdCfg.PeerTLSInfo.TrustedCAFile = etcdSignerCertPath
+
+	if s.multinode {
+		certsDir := cryptomaterial.CertsDirectory(config.DataDir)
+		etcdPeerClientCertDir := cryptomaterial.EtcdPeerCertDir(certsDir)
+
+		klog.Infof("now about to join an existing etcd cluster")
+		tlsInfo := transport.TLSInfo{
+			CertFile:      cryptomaterial.PeerCertPath(etcdPeerClientCertDir),
+			KeyFile:       cryptomaterial.PeerKeyPath(etcdPeerClientCertDir),
+			TrustedCAFile: cryptomaterial.CACertPath(cryptomaterial.EtcdSignerDir(certsDir)),
+		}
+		tlsConfig, err := tlsInfo.ClientConfig()
+		if err != nil {
+			klog.Errorf("failed to create etcd client TLS config: %v", err)
+			return
+		}
+		klog.Infof("now about to join an existing etcd cluster 2")
+		cli, err := clientv3.New(clientv3.Config{
+			Endpoints:   []string{"https://microshift-1:2379"},
+			DialTimeout: 5 * time.Second,
+			TLS:         tlsConfig,
+			Context:     context.Background(),
+		})
+		if err != nil {
+			klog.Errorf("failed to create etcd client: %v", err)
+			return
+		}
+		klog.Infof("now about to join an existing etcd cluster 3")
+		memberResponse, err := cli.MemberList(context.Background())
+		if err != nil {
+			klog.Errorf("failed to list etcd members: %v", err)
+			return
+		}
+		klog.Infof("now about to join an existing etcd cluster 4")
+		initialCluster := fmt.Sprintf("%s=https://%s:2380", cfg.Node.HostnameOverride, cfg.Node.NodeIP)
+		for _, member := range memberResponse.Members {
+			if member.Name == cfg.Node.HostnameOverride {
+				klog.Infof("etcd member %s already exists", cfg.Node.HostnameOverride)
+				continue
+			}
+			initialCluster = fmt.Sprintf("%s,%s=%s", initialCluster, member.Name, member.PeerURLs[0])
+		}
+		klog.Infof("initial cluster: %s", initialCluster)
+		s.etcdCfg.InitialCluster = initialCluster
+		s.etcdCfg.ClusterState = "existing"
+		s.etcdCfg.LogLevel = "debug"
+
+		response, err := cli.MemberAdd(context.Background(), []string{fmt.Sprintf("https://%s:2380", cfg.Node.NodeIP)})
+		if err != nil {
+			klog.Errorf("failed to add etcd member: %v", err)
+			return
+		}
+		klog.Infof("added etcd member %v", response.Member)
+	}
 }
 
 func (s *EtcdService) Run() error {

@@ -102,7 +102,7 @@ func (s *KubeAPIServer) configure(cfg *config.Config) error {
 	clientCABundlePath := cryptomaterial.TotalClientCABundlePath(certsDir)
 	aggregatorCAPath := cryptomaterial.CACertPath(cryptomaterial.AggregatorSignerDir(certsDir))
 	aggregatorClientCertDir := cryptomaterial.AggregatorClientCertDir(certsDir)
-	etcdClientCertDir := cryptomaterial.EtcdAPIServerClientCertDir(certsDir)
+	etcdClientCertDir := cryptomaterial.EtcdPeerCertDir(certsDir)
 	serviceNetworkServingCertDir := cryptomaterial.KubeAPIServerServiceNetworkServingCertDir(certsDir)
 	servingCert := cryptomaterial.ServingCertPath(serviceNetworkServingCertDir)
 	servingKey := cryptomaterial.ServingKeyPath(serviceNetworkServingCertDir)
@@ -172,8 +172,8 @@ func (s *KubeAPIServer) configure(cfg *config.Config) error {
 			"audit-log-maxsize":   {strconv.Itoa(cfg.ApiServer.AuditLog.MaxFileSize)},
 			"client-ca-file":      {clientCABundlePath},
 			"etcd-cafile":         {cryptomaterial.CACertPath(cryptomaterial.EtcdSignerDir(certsDir))},
-			"etcd-certfile":       {cryptomaterial.ClientCertPath(etcdClientCertDir)},
-			"etcd-keyfile":        {cryptomaterial.ClientKeyPath(etcdClientCertDir)},
+			"etcd-certfile":       {cryptomaterial.PeerCertPath(etcdClientCertDir)},
+			"etcd-keyfile":        {cryptomaterial.PeerKeyPath(etcdClientCertDir)},
 			"etcd-servers": {
 				"https://localhost:2379",
 			},

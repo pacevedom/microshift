@@ -61,9 +61,10 @@ func NewKubeletServer(cfg *config.Config) *KubeletServer {
 
 func (s *KubeletServer) Name() string { return componentKubelet }
 func (s *KubeletServer) Dependencies() []string {
-	if s.kubeletflags.KubeConfig != s.kubeletflags.BootstrapKubeconfig {
-		return nil
-	}
+	// if s.kubeletflags.KubeConfig != s.kubeletflags.BootstrapKubeconfig {
+	// 	return []string{"network-configuration", "etcd"}
+	// 	return nil
+	// }
 	return []string{"kube-apiserver"}
 }
 
@@ -85,6 +86,8 @@ func (s *KubeletServer) configure(cfg *config.Config) {
 	kubeletFlags.RuntimeCgroups = "/system.slice/crio.service"
 	kubeletFlags.HostnameOverride = cfg.Node.HostnameOverride
 	kubeletFlags.NodeIP = nodeIP
+	kubeletFlags.NodeLabels["node-role.kubernetes.io/control-plane"] = ""
+	kubeletFlags.NodeLabels["node-role.kubernetes.io/master"] = ""
 	kubeletFlags.NodeLabels["node-role.kubernetes.io/worker"] = ""
 	kubeletFlags.NodeLabels["node.openshift.io/os_id"] = osID
 	kubeletFlags.NodeLabels["node.kubernetes.io/instance-type"] = "rhde"
@@ -96,10 +99,14 @@ func (s *KubeletServer) configure(cfg *config.Config) {
 		servingCertDir := cryptomaterial.KubeletServingCertDir(certsDir)
 		kubeletFlags.CertDirectory = servingCertDir
 		copyKubeconfigMultinode(cfg.MultiNode.KubeConfig, cfg.KubeConfigPath("kubeadmin"))
+	} else if cfg.MultiNode.Join {
+		kubeletFlags.BootstrapKubeconfig = cfg.MultiNode.KubeConfig
+		certsDir := cryptomaterial.CertsDirectory(config.DataDir)
+		servingCertDir := cryptomaterial.KubeletServingCertDir(certsDir)
+		kubeletFlags.CertDirectory = servingCertDir
 	} else {
 		kubeletFlags.BootstrapKubeconfig = cfg.KubeConfigPath(config.Kubelet)
-		kubeletFlags.NodeLabels["node-role.kubernetes.io/control-plane"] = ""
-		kubeletFlags.NodeLabels["node-role.kubernetes.io/master"] = ""
+
 	}
 
 	kubeletConfig, err := loadConfigFile(filepath.Join(config.DataDir, "/resources/kubelet/config/config.yaml"))
