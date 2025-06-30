@@ -28,6 +28,11 @@ import (
 	"strings"
 	"time"
 
+	configv1 "github.com/openshift/api/config/v1"
+	kubecontrolplanev1 "github.com/openshift/api/kubecontrolplane/v1"
+	"github.com/openshift/library-go/pkg/operator/resource/resourcemerge"
+	"go.etcd.io/etcd/client/pkg/v3/transport"
+	clientv3 "go.etcd.io/etcd/client/v3"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
@@ -38,10 +43,6 @@ import (
 	kubeapiserver "k8s.io/kubernetes/cmd/kube-apiserver/app"
 	hostassignmentv1 "k8s.io/kubernetes/openshift-kube-apiserver/admission/route/apis/hostassignment/v1"
 	"sigs.k8s.io/yaml"
-
-	configv1 "github.com/openshift/api/config/v1"
-	kubecontrolplanev1 "github.com/openshift/api/kubecontrolplane/v1"
-	"github.com/openshift/library-go/pkg/operator/resource/resourcemerge"
 
 	embedded "github.com/openshift/microshift/assets"
 	"github.com/openshift/microshift/pkg/config"
@@ -75,7 +76,7 @@ func init() {
 type KubeAPIServer struct {
 	kasConfigBytes []byte
 	verbosity      int
-	configureErr   error // todo: report configuration errors immediately
+	config         *config.Config
 
 	masterURL        string
 	servingCAPath    string
@@ -83,9 +84,8 @@ type KubeAPIServer struct {
 }
 
 func NewKubeAPIServer(cfg *config.Config) *KubeAPIServer {
-	s := &KubeAPIServer{}
-	if err := s.configure(cfg); err != nil {
-		s.configureErr = err
+	s := &KubeAPIServer{
+		config: cfg,
 	}
 	return s
 }
@@ -163,20 +163,25 @@ func (s *KubeAPIServer) configure(cfg *config.Config) error {
 		}
 	}
 
+	// Target only voting members for the etcd servers list. If there is a promotion it is required to
+	// restart this controller, which in turn means restarting MicroShift.
+	etcdServers, err := discoverEtcdMembers(s.config.Node.HostnameOverride)
+	if err != nil {
+		return fmt.Errorf("failed to discover etcd members: %w", err)
+	}
+
 	overrides := &kubecontrolplanev1.KubeAPIServerConfig{
 		APIServerArguments: map[string]kubecontrolplanev1.Arguments{
-			"advertise-address":   {s.advertiseAddress},
-			"audit-policy-file":   {filepath.Join(config.DataDir, "/resources/kube-apiserver-audit-policies/default.yaml")},
-			"audit-log-maxage":    {strconv.Itoa(cfg.ApiServer.AuditLog.MaxFileAge)},
-			"audit-log-maxbackup": {strconv.Itoa(cfg.ApiServer.AuditLog.MaxFiles)},
-			"audit-log-maxsize":   {strconv.Itoa(cfg.ApiServer.AuditLog.MaxFileSize)},
-			"client-ca-file":      {clientCABundlePath},
-			"etcd-cafile":         {cryptomaterial.CACertPath(cryptomaterial.EtcdSignerDir(certsDir))},
-			"etcd-certfile":       {cryptomaterial.ClientCertPath(etcdClientCertDir)},
-			"etcd-keyfile":        {cryptomaterial.ClientKeyPath(etcdClientCertDir)},
-			"etcd-servers": {
-				"https://localhost:2379",
-			},
+			"advertise-address":             {s.advertiseAddress},
+			"audit-policy-file":             {filepath.Join(config.DataDir, "/resources/kube-apiserver-audit-policies/default.yaml")},
+			"audit-log-maxage":              {strconv.Itoa(cfg.ApiServer.AuditLog.MaxFileAge)},
+			"audit-log-maxbackup":           {strconv.Itoa(cfg.ApiServer.AuditLog.MaxFiles)},
+			"audit-log-maxsize":             {strconv.Itoa(cfg.ApiServer.AuditLog.MaxFileSize)},
+			"client-ca-file":                {clientCABundlePath},
+			"etcd-cafile":                   {cryptomaterial.CACertPath(cryptomaterial.EtcdSignerDir(certsDir))},
+			"etcd-certfile":                 {cryptomaterial.ClientCertPath(etcdClientCertDir)},
+			"etcd-keyfile":                  {cryptomaterial.ClientKeyPath(etcdClientCertDir)},
+			"etcd-servers":                  etcdServers,
 			"kubelet-certificate-authority": {cryptomaterial.CABundlePath(kubeCSRSignerDir)},
 			"kubelet-client-certificate":    {cryptomaterial.ClientCertPath(kubeletClientDir)},
 			"kubelet-client-key":            {cryptomaterial.ClientKeyPath(kubeletClientDir)},
@@ -308,8 +313,8 @@ func (s *KubeAPIServer) configureAuditPolicy(cfg *config.Config) error {
 }
 
 func (s *KubeAPIServer) Run(ctx context.Context, ready chan<- struct{}, stopped chan<- struct{}) error {
-	if s.configureErr != nil {
-		return fmt.Errorf("configuration failed: %w", s.configureErr)
+	if err := s.configure(s.config); err != nil {
+		return fmt.Errorf("configuration failed: %w", err)
 	}
 
 	defer close(stopped)
@@ -405,4 +410,89 @@ func (s *KubeAPIServer) Run(ctx context.Context, ready chan<- struct{}, stopped 
 	case perr := <-panicChannel:
 		panic(perr)
 	}
+}
+
+func discoverEtcdMembers(name string) ([]string, error) {
+	//TODO this is disgusting. Simplify.
+	certsDir := cryptomaterial.CertsDirectory(config.DataDir)
+	etcdPeerCertDir := cryptomaterial.EtcdPeerCertDir(certsDir)
+
+	tlsInfo := transport.TLSInfo{
+		CertFile:      cryptomaterial.PeerCertPath(etcdPeerCertDir),
+		KeyFile:       cryptomaterial.PeerKeyPath(etcdPeerCertDir),
+		TrustedCAFile: cryptomaterial.CACertPath(cryptomaterial.EtcdSignerDir(certsDir)),
+	}
+	tlsConfig, err := tlsInfo.ClientConfig()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create etcd client TLS config: %v", err)
+	}
+
+	client, err := clientv3.New(clientv3.Config{
+		DialTimeout: 5 * time.Second,
+		Endpoints:   []string{"https://localhost:2379"},
+		TLS:         tlsConfig,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create etcd client: %w", err)
+	}
+	defer client.Close()
+
+	st, err := client.Status(context.Background(), "localhost:2379")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get etcd status: %w", err)
+	}
+	if st.IsLearner {
+		bootstrapKubeconfig := "/var/lib/microshift/resources/kubelet/bootstrap-kubeconfig"
+		config, err := clientcmd.LoadFromFile(bootstrapKubeconfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load bootstrap kubeconfig: %w", err)
+		}
+
+		if config == nil || config.Clusters == nil || len(config.Clusters) == 0 {
+			return nil, fmt.Errorf("invalid bootstrap kubeconfig: no clusters found")
+		}
+
+		var etcdHost string
+		for _, cluster := range config.Clusters {
+			etcdHost = cluster.Server
+			break
+		}
+
+		if etcdHost == "" {
+			return nil, fmt.Errorf("failed to extract etcd hostname from bootstrap kubeconfig")
+		}
+
+		etcdHost = strings.TrimPrefix(etcdHost, "https://")
+		etcdHost, _, _ = net.SplitHostPort(etcdHost)
+		etcdHost = fmt.Sprintf("https://%s", net.JoinHostPort(etcdHost, "2379"))
+		client, err = clientv3.New(clientv3.Config{
+			DialTimeout: 5 * time.Second,
+			Endpoints:   []string{etcdHost},
+			TLS:         tlsConfig,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to create etcd client: %w", err)
+		}
+	}
+
+	resp, err := client.MemberList(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve etcd member list: %w", err)
+	}
+
+	iAmLearner := false
+	var members []string
+	for _, member := range resp.Members {
+		if member.Name == name && member.IsLearner {
+			iAmLearner = true
+			continue
+		}
+		if !member.IsLearner {
+			members = append(members, member.ClientURLs...)
+		}
+	}
+	if iAmLearner {
+		return members, nil
+	}
+	return []string{"https://localhost:2379"}, nil
 }
