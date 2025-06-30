@@ -15,7 +15,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -177,29 +176,18 @@ func getNodeCount(ctx context.Context, client kubernetes.Interface) (int, error)
 		return 0, err
 	}
 
-	readyCount := 0
-	for _, node := range nodes.Items {
-		if isNodeReady(&node) {
-			readyCount++
-		}
-	}
-
-	return readyCount, nil
-}
-
-func isNodeReady(node *corev1.Node) bool {
-	for _, condition := range node.Status.Conditions {
-		if condition.Type == corev1.NodeReady {
-			return condition.Status == corev1.ConditionTrue
-		}
-	}
-	return false
+	return len(nodes.Items), nil
 }
 
 func waitForNewNode(ctx context.Context, client kubernetes.Interface, initialNodeCount int) (string, error) {
+	nodesList, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return "", fmt.Errorf("failed to list nodes: %w", err)
+	}
+
 	watchInterface, err := client.CoreV1().Nodes().Watch(ctx, metav1.ListOptions{
-		Watch:         true,
-		FieldSelector: fields.Everything().String(),
+		Watch:           true,
+		ResourceVersion: nodesList.ResourceVersion,
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to start watching nodes: %w", err)
