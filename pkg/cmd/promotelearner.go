@@ -20,8 +20,9 @@ func NewPromoteLearnerCommand() *cobra.Command {
 		Use:    "promote-learner",
 		Short:  "Promote a learner node in the etcd cluster",
 		Hidden: true,
-		//TODO review this.
-		Long: ``,
+		Long: `Promote a learner node to a voting member in the etcd cluster.
+		This command promotes any learner node found in the etcd cluster, as there can
+		only be one learner at a time.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runPromoteLearner(cmd.Context())
 		},

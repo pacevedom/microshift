@@ -110,11 +110,10 @@ func runJoinCluster(ctx context.Context, opts *JoinClusterOptions) error {
 	}
 	klog.Info("Etcd certificates generated successfully")
 
-	nodeCount, clusterMembers, err := getClusterInfo(ctx, client)
+	_, clusterMembers, err := getClusterInfo(ctx, client)
 	if err != nil {
 		return fmt.Errorf("failed to get cluster information: %w", err)
 	}
-	klog.Infof("Found %d nodes in cluster", nodeCount)
 
 	if err := configureEtcdForCluster(cfg, clusterMembers, opts.Learner); err != nil {
 		return fmt.Errorf("failed to configure etcd for cluster: %w", err)
@@ -312,7 +311,6 @@ func generateEtcdCertificates(cfg *config.Config, caCertPEM, caKeyPEM, serial []
 		return fmt.Errorf("failed to write client certificate: %w", err)
 	}
 
-	klog.Info("All etcd certificates generated successfully with proper signatures and SAN entries")
 	return nil
 }
 
@@ -379,8 +377,6 @@ func configureEtcdForCluster(cfg *config.Config, clusterMembers []string, isLear
 		return fmt.Errorf("failed to write etcd cluster configuration: %w", err)
 	}
 
-	klog.Infof("Etcd YAML configuration written to %s", configFilePath)
-
 	certsDir := cryptomaterial.CertsDirectory(config.DataDir)
 	etcdPeerClientCertDir := cryptomaterial.EtcdPeerCertDir(certsDir)
 
@@ -421,7 +417,6 @@ func configureEtcdForCluster(cfg *config.Config, clusterMembers []string, isLear
 	initialCluster := fmt.Sprintf("%s=https://%s:2380", cfg.Node.HostnameOverride, cfg.Node.NodeIP)
 	for _, member := range memberResponse.Members {
 		if member.Name == cfg.Node.HostnameOverride {
-			klog.Infof("etcd member %s already exists", cfg.Node.HostnameOverride)
 			continue
 		}
 		if !member.IsLearner {
@@ -429,8 +424,6 @@ func configureEtcdForCluster(cfg *config.Config, clusterMembers []string, isLear
 		}
 		initialCluster = fmt.Sprintf("%s,%s=%s", initialCluster, member.Name, member.PeerURLs[0])
 	}
-	klog.Infof("initial cluster: %v", initialCluster)
-	klog.Infof("filtered endpoints: %v", filteredEndpoints)
 
 	client, err = clientv3.New(clientv3.Config{
 		Endpoints:   filteredEndpoints,
@@ -486,7 +479,7 @@ func waitForNodeReady(ctx context.Context, client kubernetes.Interface, nodeName
 	klog.Infof("Waiting for node %s to become ready...", nodeName)
 
 	timeout := time.After(5 * time.Minute)
-	ticker := time.NewTicker(10 * time.Second)
+	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
 	for {
