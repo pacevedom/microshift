@@ -35,8 +35,9 @@ func NewAddNodeMicroshiftCommand() *cobra.Command {
 	var nodeJoinTimeout time.Duration
 
 	cmd := &cobra.Command{
-		Use:   "add-node",
-		Short: "Add a node to MicroShift cluster by exposing etcd CA and waiting for node to join",
+		Use:    "add-node",
+		Short:  "Add a node to MicroShift cluster by exposing etcd CA and waiting for node to join",
+		Hidden: true,
 		Long: `This command prepares the cluster to accept a new node by:
 1. Expose the etcd CA certificate in a Kubernetes secret
 2. Wait for a new node to join the cluster

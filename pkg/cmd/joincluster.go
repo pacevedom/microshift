@@ -53,9 +53,9 @@ func NewJoinClusterCommand() *cobra.Command {
 	}
 
 	cmd := &cobra.Command{
-		Use:   "join-cluster",
-		Short: "Join a node to an existing MicroShift cluster",
-		//TODO review this.
+		Use:    "join-cluster",
+		Short:  "Join a node to an existing MicroShift cluster",
+		Hidden: true,
 		Long: `This command joins a node to an existing MicroShift cluster by:
 1. Loading the MicroShift configuration from files
 2. Fetching etcd CA certificate and key from the cluster using provided kubeconfig

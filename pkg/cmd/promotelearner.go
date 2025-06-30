@@ -17,8 +17,9 @@ import (
 
 func NewPromoteLearnerCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "promote-learner",
-		Short: "Promote a learner node in the etcd cluster",
+		Use:    "promote-learner",
+		Short:  "Promote a learner node in the etcd cluster",
+		Hidden: true,
 		//TODO review this.
 		Long: ``,
 		RunE: func(cmd *cobra.Command, args []string) error {
