@@ -229,6 +229,12 @@ func (c *Config) incorporateUserSettings(u *Config) {
 	if u.Etcd.MemoryLimitMB != 0 {
 		c.Etcd.MemoryLimitMB = u.Etcd.MemoryLimitMB
 	}
+	if u.Etcd.InitialCluster != "" {
+		c.Etcd.InitialCluster = u.Etcd.InitialCluster
+	}
+	if u.Etcd.ClusterState != "" {
+		c.Etcd.ClusterState = u.Etcd.ClusterState
+	}
 
 	if u.Node.HostnameOverride != "" {
 		c.Node.HostnameOverride = u.Node.HostnameOverride

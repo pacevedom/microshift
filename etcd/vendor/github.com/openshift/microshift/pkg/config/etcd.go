@@ -26,4 +26,7 @@ type EtcdConfig struct {
 	// How often to check the conditions for defragging (0 means no
 	// defrags, except for a single on startup).
 	DefragCheckFreq time.Duration `json:"-"`
+
+	InitialCluster string `json:"initialCluster,omitempty"`
+	ClusterState   string `json:"clusterState,omitempty"`
 }
