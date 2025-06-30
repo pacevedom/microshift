@@ -76,7 +76,11 @@ func (s *KubeletServer) configure(cfg *config.Config) {
 		nodeIP = fmt.Sprintf("%s,%s", nodeIP, cfg.Node.NodeIPV6)
 	}
 	kubeletFlags := kubeletoptions.NewKubeletFlags()
-	kubeletFlags.BootstrapKubeconfig = cfg.KubeConfigPath(config.Kubelet)
+	if _, err := os.Stat(cfg.BootstrapKubeConfigPath()); err == nil {
+		kubeletFlags.BootstrapKubeconfig = cfg.BootstrapKubeConfigPath()
+	} else {
+		kubeletFlags.BootstrapKubeconfig = cfg.KubeConfigPath(config.Kubelet)
+	}
 	kubeletFlags.KubeConfig = cfg.KubeConfigPath(config.Kubelet)
 	kubeletFlags.RuntimeCgroups = "/system.slice/crio.service"
 	kubeletFlags.HostnameOverride = cfg.Node.HostnameOverride
@@ -140,6 +144,10 @@ func (s *KubeletServer) generateConfig(cfg *config.Config) ([]byte, error) {
 		}
 		userProvidedConfig = string(b)
 	}
+	bootstrap := false
+	if _, err := os.Stat(cfg.BootstrapKubeConfigPath()); err == nil {
+		bootstrap = true
+	}
 
 	tplParams := map[string]string{
 		"clientCAFile":       cryptomaterial.KubeletClientCAPath(cryptomaterial.CertsDirectory(config.DataDir)),
@@ -151,6 +159,7 @@ func (s *KubeletServer) generateConfig(cfg *config.Config) ([]byte, error) {
 		"tlsCipherSuites":    strings.Join(cfg.ApiServer.TLS.CipherSuites, ","),
 		"tlsMinVersion":      cfg.ApiServer.TLS.MinVersion,
 		"userProvidedConfig": userProvidedConfig,
+		"bootstrap":          fmt.Sprintf("%v", bootstrap),
 	}
 
 	var data bytes.Buffer
