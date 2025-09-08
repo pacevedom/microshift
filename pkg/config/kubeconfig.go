@@ -27,3 +27,7 @@ func (cfg *Config) KubeConfigAdminPath(id string) string {
 func (cfg *Config) KubeConfigRootAdminPath() string {
 	return filepath.Join(DataDir, "resources", string(KubeAdmin))
 }
+
+func (cfg *Config) BootstrapKubeConfigPath() string {
+	return filepath.Join(DataDir, "resources", "bootstrap", "kubeconfig")
+}
