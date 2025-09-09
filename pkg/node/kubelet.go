@@ -148,7 +148,7 @@ func (s *KubeletServer) generateConfig(cfg *config.Config) ([]byte, error) {
 
 	tplParams := map[string]string{
 		"clientCAFile":       cryptomaterial.KubeletClientCAPath(cryptomaterial.CertsDirectory(config.DataDir)),
-		"tlsCertFile":        cryptomaterial.ServingCertPath(servingCertDir),
+		"tlsCertFile":        cryptomaterial.ServingCertPath(servingCertDir), //TODO can i even skip this?
 		"tlsPrivateKeyFile":  cryptomaterial.ServingKeyPath(servingCertDir),
 		"volumePluginDir":    config.DataDir + "/kubelet-plugins/volume/exec",
 		"clusterDNSIP":       cfg.Network.DNS,
@@ -158,6 +158,10 @@ func (s *KubeletServer) generateConfig(cfg *config.Config) ([]byte, error) {
 		"userProvidedConfig": userProvidedConfig,
 		"bootstrap":          fmt.Sprintf("%v", bootstrap),
 	}
+	// if !bootstrap {
+	// 	tplParams["tlsCertFile"] = cryptomaterial.ServingCertPath(servingCertDir)
+	// 	tplParams["tlsPrivateKeyFile"] = cryptomaterial.ServingKeyPath(servingCertDir)
+	// }
 
 	var data bytes.Buffer
 	if err := tpl.Execute(&data, tplParams); err != nil {

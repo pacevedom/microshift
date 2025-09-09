@@ -189,6 +189,7 @@ func certSetup(cfg *config.Config) (*certchains.CertificateChains, error) {
 						Name:     "kubelet-server",
 						Validity: cryptomaterial.ShortLivedCertificateValidity,
 					},
+					//TODO there is some trouble with this and the csr. maybe i need to drop the csr altogether. try that.
 					Hostnames: []string{cfg.Node.HostnameOverride, cfg.Node.NodeIP},
 				},
 			),
@@ -507,18 +508,21 @@ func initKubeconfigs(
 		return err
 	}
 
-	kubeletCertPEM, kubeletKeyPEM, err := certChains.GetCertKey("kubelet-signer", "kube-csr-signer", "kubelet-client")
-	if err != nil {
-		return err
-	}
-	if err := util.KubeConfigWithClientCerts(
-		cfg.KubeConfigPath(config.Kubelet),
-		cfg.ApiServer.URL,
-		internalTrustPEM,
-		kubeletCertPEM, kubeletKeyPEM,
-	); err != nil {
-		return err
-	}
+	//TODO skip this if I am joining a cluster.
+	// if !cfg.BootstrapKubeConfigExists() {
+		kubeletCertPEM, kubeletKeyPEM, err := certChains.GetCertKey("kubelet-signer", "kube-csr-signer", "kubelet-client")
+		if err != nil {
+			return err
+		}
+		if err := util.KubeConfigWithClientCerts(
+			cfg.KubeConfigPath(config.Kubelet),
+			cfg.ApiServer.URL,
+			internalTrustPEM,
+			kubeletCertPEM, kubeletKeyPEM,
+		); err != nil {
+			return err
+		}
+	// }
 	clusterPolicyControllerCertPEM, clusterPolicyControllerKeyPEM, err := certChains.GetCertKey("kube-control-plane-signer", "cluster-policy-controller")
 	if err != nil {
 		return err

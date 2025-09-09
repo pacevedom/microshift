@@ -32,7 +32,7 @@ func (cfg *Config) KubeConfigRootAdminPath() string {
 }
 
 func (cfg *Config) BootstrapKubeConfigPath() string {
-	return filepath.Join(DataDir, "resources", "bootstrap", "kubeconfig")
+	return filepath.Join(DataDir, "bootstrap", "kubeconfig")
 }
 
 func (cfg *Config) BootstrapKubeConfigExists() bool {

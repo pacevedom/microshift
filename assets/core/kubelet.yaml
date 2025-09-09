@@ -19,7 +19,7 @@ featureGates:
   DownwardAPIHugePages: true
   PodSecurity: true
 {{- if eq .bootstrap  "true" }}
-  RotateKubeletServerCertificate: true
+  RotateKubeletServerCertificate: false
 {{- else }}
   RotateKubeletServerCertificate: false
 {{- end }}
@@ -30,7 +30,7 @@ nodeStatusReportFrequency: 5m
 rotateCertificates: false # TODO
 serializeImagePulls: false
 {{- if eq .bootstrap  "true" }}
-serverTLSBootstrap: true
+serverTLSBootstrap: false
 {{- else }}
 serverTLSBootstrap: false
 {{- end }}
