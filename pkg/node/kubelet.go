@@ -77,7 +77,7 @@ func (s *KubeletServer) configure(cfg *config.Config) {
 	}
 	kubeletFlags := kubeletoptions.NewKubeletFlags()
 	kubeletFlags.BootstrapKubeconfig = cfg.KubeConfigPath(config.Kubelet)
-	if _, err := os.Stat(cfg.BootstrapKubeConfigPath()); err == nil {
+	if cfg.BootstrapKubeConfigExists() {
 		kubeletFlags.BootstrapKubeconfig = cfg.BootstrapKubeConfigPath()
 	}
 	kubeletFlags.KubeConfig = cfg.KubeConfigPath(config.Kubelet)
@@ -144,10 +144,7 @@ func (s *KubeletServer) generateConfig(cfg *config.Config) ([]byte, error) {
 		userProvidedConfig = string(b)
 	}
 
-	bootstrap := "false"
-	if _, err := os.Stat(cfg.BootstrapKubeConfigPath()); err == nil {
-		bootstrap = "true"
-	}
+	bootstrap := cfg.BootstrapKubeConfigExists()
 
 	tplParams := map[string]string{
 		"clientCAFile":       cryptomaterial.KubeletClientCAPath(cryptomaterial.CertsDirectory(config.DataDir)),

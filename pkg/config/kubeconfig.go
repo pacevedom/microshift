@@ -1,6 +1,9 @@
 package config
 
-import "path/filepath"
+import (
+	"os"
+	"path/filepath"
+)
 
 // KubeConfigID identifies the different kubeconfigs managed in the DataDir
 type KubeConfigID string
@@ -30,4 +33,9 @@ func (cfg *Config) KubeConfigRootAdminPath() string {
 
 func (cfg *Config) BootstrapKubeConfigPath() string {
 	return filepath.Join(DataDir, "resources", "bootstrap", "kubeconfig")
+}
+
+func (cfg *Config) BootstrapKubeConfigExists() bool {
+	_, err := os.Stat(cfg.BootstrapKubeConfigPath())
+	return err == nil
 }
