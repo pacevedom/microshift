@@ -1,0 +1,45 @@
+scenarios:
+  # Example: Standard test suite (non-upgrade)
+  - name: el96-src@standard-suite1
+    description: |
+      Run standard test suite against MicroShift built from source
+      on RHEL 9.6. This test does not require VM destruction.
+    suites:
+      - suites/standard1
+    config:
+      network:
+        - "default"
+    variables:
+      USHIFT_HOST: "host1"
+      USHIFT_USER: "root"
+    destroy_vm: false
+  - name: el96-src@standard-suite2
+    description: |
+      Run standard test suite against MicroShift built from source
+      on RHEL 9.6. This test does not require VM destruction.
+    suites:
+      - suites/standard2
+    variables:
+      USHIFT_HOST: "host1"
+      USHIFT_USER: "root"
+    destroy_vm: false
+  - name: el96-src@storage
+    description: |
+      Run standard test suite against MicroShift built from source
+      on RHEL 9.6. This test does not require VM destruction.
+    suites:
+      - suites/storage
+    variables:
+      USHIFT_HOST: "host1"
+      USHIFT_USER: "root"
+    destroy_vm: false
+  - name: el96-src@backups
+    description: |
+      Run standard test suite against MicroShift built from source
+      on RHEL 9.6. This test does not require VM destruction.
+    suites:
+      - suites/backup/backups.robot
+    variables:
+      USHIFT_HOST: "host1"
+      USHIFT_USER: "root"
+    destroy_vm: false
