@@ -1,0 +1,113 @@
+launchers:
+  # Standard launcher for RHEL 9.6 with kickstart template
+  - name: el96-src@standard-vm
+    description: |
+      Standard launcher for RHEL 9.6 VMs using kickstart template.
+      Suitable for most test scenarios.
+    variables:
+      PULL_SECRET: "${HOME}/.pull-secret.json"
+      BOOT_BLUEPRINT: "rhel-9.6"
+      VM_BOOT_TIMEOUT: 1200
+      VM_GREENBOOT_TIMEOUT: 1800
+    base_image: "rhel-9.6-microshift-source"
+    kickstart_file: "kickstart.ks.template"
+    overrides: |-
+      Example script. this should be the content for the create_vms section.
+
+  # Launcher for RHEL 9.6 base image (for upgrade tests)
+  - name: rhel96-base-kickstart
+    description: |
+      Launcher for RHEL 9.6 base image, typically used for upgrade tests
+      that start from a base version.
+    variables:
+      PULL_SECRET: "${HOME}/.pull-secret.json"
+      BOOT_BLUEPRINT: "rhel-9.6"
+      VM_BOOT_TIMEOUT: 1200
+      VM_GREENBOOT_TIMEOUT: 1800
+    base_image: "rhel-9.6-microshift-source-base"
+    kickstart_file: "kickstart.ks.template"
+
+  # Launcher for isolated network scenarios
+  - name: rhel96-kickstart-isolated
+    description: |
+      Launcher for RHEL 9.6 VMs with isolated network configuration.
+      Used for network isolation testing.
+    variables:
+      PULL_SECRET: "${HOME}/.pull-secret.json"
+      BOOT_BLUEPRINT: "rhel-9.6"
+      VM_BOOT_TIMEOUT: 1200
+      VM_GREENBOOT_TIMEOUT: 1800
+      NETWORK_MODE: "isolated"
+    base_image: "rhel-9.6-microshift-source"
+    kickstart_file: "kickstart-isolated.ks.template"
+
+  # Launcher for offline scenarios
+  - name: rhel96-kickstart-offline
+    description: |
+      Launcher for RHEL 9.6 VMs configured for offline testing.
+      Used when network access is not available.
+    variables:
+      PULL_SECRET: "${HOME}/.pull-secret.json"
+      BOOT_BLUEPRINT: "rhel-9.6"
+      VM_BOOT_TIMEOUT: 1200
+      VM_GREENBOOT_TIMEOUT: 1800
+      OFFLINE_MODE: "true"
+    base_image: "rhel-9.6-microshift-source"
+    kickstart_file: "kickstart-offline.ks.template"
+
+  # Launcher for FIPS-enabled scenarios
+  - name: rhel96-kickstart-fips
+    description: |
+      Launcher for RHEL 9.6 VMs with FIPS mode enabled.
+      Used for FIPS compliance testing.
+    variables:
+      PULL_SECRET: "${HOME}/.pull-secret.json"
+      BOOT_BLUEPRINT: "rhel-9.6"
+      VM_BOOT_TIMEOUT: 1200
+      VM_GREENBOOT_TIMEOUT: 1800
+      FIPS_MODE: "true"
+    base_image: "rhel-9.6-microshift-source"
+    kickstart_file: "kickstart.ks.template"
+
+  # Launcher for bootc container scenarios
+  - name: rhel96-bootc-container
+    description: |
+      Launcher for RHEL 9.6 bootc container-based images.
+      Used for container-native testing scenarios.
+    variables:
+      PULL_SECRET: "${HOME}/.pull-secret.json"
+      BOOT_BLUEPRINT: "rhel-9.6"
+      VM_BOOT_TIMEOUT: 1200
+      VM_GREENBOOT_TIMEOUT: 1800
+      CONTAINER_MODE: "true"
+    base_image: "rhel-9.6-microshift-source"
+    kickstart_file: "kickstart-bootc-container.ks.template"
+
+  # Launcher for live image scenarios
+  - name: rhel96-liveimg
+    description: |
+      Launcher for RHEL 9.6 using live image installation method.
+      Alternative installation approach for testing.
+    #TODO might need an overrides section to do bash stuff there.
+    variables:
+      PULL_SECRET: "${HOME}/.pull-secret.json"
+      BOOT_BLUEPRINT: "rhel-9.6"
+      VM_BOOT_TIMEOUT: 1200
+      VM_GREENBOOT_TIMEOUT: 1800
+      INSTALL_METHOD: "liveimg"
+    base_image: "rhel-9.6-microshift-source"
+    kickstart_file: "kickstart-liveimg.ks.template"
+
+  # Launcher for minimal resource scenarios
+  - name: rhel96-kickstart-minimal
+    description: |
+      Launcher for RHEL 9.6 VMs with minimal resource requirements.
+      Used for lightweight test scenarios.
+    variables:
+      PULL_SECRET: "${HOME}/.pull-secret.json"
+      BOOT_BLUEPRINT: "rhel-9.6"
+      VM_BOOT_TIMEOUT: 1200
+      VM_GREENBOOT_TIMEOUT: 1800
+    base_image: "rhel-9.6-microshift-source"
+    kickstart_file: "kickstart.ks.template"
+
