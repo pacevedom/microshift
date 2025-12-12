@@ -44,12 +44,20 @@ class VMStatus(Enum):
 
 @dataclass
 class VMConfig:
-    """VM configuration requirements."""
+    """VM configuration requirements.
+    cpu: number of CPUs
+    memory: memory in MB
+    network: list of network names
+    optionals: list of optional packages to install
+    fips: whether to enable FIPS mode
+    os: operating system to use. Can be el94, el96, el100...
+    """
     cpu: int = 2
     memory: int = 4096  # in MB
     network: List[str] = None
     optionals: bool = False
     fips: bool = False
+    os: str = None
 
     def __post_init__(self):
         if self.packages is None:
@@ -75,6 +83,7 @@ class Launcher:
     variables: Dict[str, Any]
     base_image: str
     kickstart_file: str
+    vm_config: VMConfig
 
 
 @dataclass
@@ -279,6 +288,7 @@ class VMManager:
                     return vm
                 logger.info(f"No available VM found, checking if we can create one")
                 if self.can_create_vm(required_config):
+                    #TODO this required config argument is wrong. need to reconcile launcher and required one.
                     return self.create_vm(required_config, launcher)
             logger.info("No available VM found, waiting...")
             time.sleep(5)
@@ -471,9 +481,9 @@ class TestRunner:
                 cpu=vm_config_data.get('cpu', 2),
                 memory=vm_config_data.get('memory', 4096),
                 network=vm_config_data.get('network', None),
-                optionals=config_data.get('optionals', False),
-                fips=config_data.get('fips', False)
-                base_image=config_data.get('base_image', None)
+                optionals=vm_config_data.get('optionals', False),
+                fips=vm_config_data.get('fips', False)
+                os=vm_config_data.get('os', None)
             )
 
             scenario = Scenario(
@@ -502,7 +512,15 @@ class TestRunner:
                 description=launcher_data.get('description', ''),
                 variables=launcher_data.get('variables', {}),
                 base_image=launcher_data['base_image'],
-                kickstart_file=launcher_data['kickstart_file']
+                kickstart_file=launcher_data['kickstart_file'],
+                vm_config=VMConfig(
+                    cpu=launcher_data['vm_config']['cpu'],
+                    memory=launcher_data['vm_config']['memory'],
+                    network=launcher_data['vm_config']['network'],
+                    optionals=launcher_data['vm_config']['optionals'],
+                    fips=launcher_data['vm_config']['fips'],
+                    os=launcher_data['vm_config']['os']
+                )
             )
             launchers[launcher.name] = launcher
 
