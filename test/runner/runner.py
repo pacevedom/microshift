@@ -64,6 +64,16 @@ class VMConfig:
             self.packages = []
 
 
+def match_config(required_config: VMConfig, test_config: VMConfig) -> bool:
+    """Check if the test configuration matches the required configuration."""
+    #TODO review this. also use it as part of hte launcher selection and test-VM matching
+    return all(required_config.cpu >= test_config.cpu,
+               required_config.memory >= test_config.memory,
+               required_config.network == test_config.network,
+               required_config.optionals == test_config.optionals,
+               required_config.fips == test_config.fips,
+               required_config.os == test_config.os)
+
 @dataclass
 class Scenario:
     """Test scenario configuration."""
@@ -180,12 +190,12 @@ class VM:
                 f"--vm_memory {self.config.memory}",
             ]
 
-            #TODO rework this one.
+            #TODO rework this one. need to get blueprints, kickstarts, networks, cpu etc from the config.
+            # it might even reference variables from the scenario/common.sh files. dont even replace them, the scripts will handle.
             boot_blueprint = self.launcher.variables.get("BOOT_BLUEPRINT")
             if boot_blueprint:
                 launch_args.append(f"--boot_blueprint {boot_blueprint}")
 
-            #TODO this might be a list of networks. Take driver too as well. if not present, add it.
             if self.config.network:
                 launch_args.append(f"--network {self.config.network}")
             else:
@@ -196,8 +206,6 @@ class VM:
             if fips_enabled:
                 launch_args.append("--fips")
 
-            #TODO this could have additional arugments, look them up. i have ipv6, fips and the rest is just template and base image. so those could well be in the file for the launcher too.
-            # and get defaults.
             scenario_create_vms = (
                 f"scenario_create_vms() {{\n"
                 f"    prepare_kickstart {vmhostname} {self.launcher.kickstart_file} {self.launcher.base_image} {fips_kickstart}\n"
@@ -341,6 +349,7 @@ class VMManager:
             # Call scenario.sh create with the generated script
             logger.info(f"Creating virtual machine {vm.name} with script: {scenario_script}")
 
+            #TODO need to store the logs in a file. same directory.
             result = subprocess.run(
                 [scenario_sh_path, "create", scenario_script],
                 capture_output=True,
@@ -528,19 +537,20 @@ class TestRunner:
         return launchers
 
 
-    def select_launcher(self, scenario: Scenario) -> Launcher:
+    def select_launcher(self, required_config: VMConfig) -> Launcher:
         """
         Select an appropriate launcher for a scenario.
 
         Args:
-            scenario: Scenario to select launcher for
+            required_config: VM configuration requirements
 
         Returns:
             Selected launcher
         """
         #TODO this is all wrong. a launcher should be selected based on the config of the scenario.
-        # For now, use a default launcher. In the future, this could be
-        # based on scenario requirements or configuration.
+        # this is as simple as taking configuration requirements and see which one matches the launcher?
+        # yeah.
+
         default_launcher_name = "el96-src@standard-vm"
 
         if default_launcher_name in self.launchers:
@@ -606,11 +616,12 @@ class TestRunner:
         """
         logger.info(f"Starting test: {scenario.name}")
 
-        # Select a launcher for this scenario
-        launcher = self.select_launcher(scenario)
+        # Select a launcher for this scenario. Pick the simplest match. Or first match?
+        launcher = self.select_launcher(scenario.vm_config)
 
         # Find or create a VM
-        #TODO launchers should be part of the vm manager.
+        #TODO launchers should be part of the vm manager. i might even be able to know which vm i should target beforehand...
+        # that should happen before calling this function though.
         vm = self.vm_manager.wait_for_available_vm(scenario.vm_config, launcher)
         logger.info(f"VM {vm.vm_id} found for test: {scenario.name}")
 
@@ -637,13 +648,12 @@ class TestRunner:
                 f"Calling scenario.sh run with script: {test_script_path} "
                 f"and RUN_HOST_OVERRIDE={vm.ip_address}"
             )
+            #TODO where do i store the logs?
             result = subprocess.run(
                 [scenario_sh_path, "run", test_script_path, vm.ip_address],
                 capture_output=True,
                 text=True,
                 check=False,
-                # stdout=None,  # Stream to sys.stdout
-                # stderr=None   # Stream to sys.stderr
             )
             if result.returncode != 0:
                 error_msg = (
@@ -811,6 +821,9 @@ def main():
         action='store_true',
         help='Enable verbose logging'
     )
+    #TODO need some overrides here for both scenario and launcher.
+    # also need an option to not teardown the VM immediately.
+    # the script should also pick up the VMs running before i even called it. this is file system traversal.
 
     args = parser.parse_args()
 
@@ -828,6 +841,7 @@ def main():
         total_memory=total_memory_mb-args.reserved_memory
     )
     #TODO all strings should be replaced with os.path.expandvars to handle env vars from common.sh. so this should be in its shell script to launch.
+    # maybe not. just leave it like that.
     runner.run()
 
 
