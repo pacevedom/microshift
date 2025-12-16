@@ -9,7 +9,4 @@ scenarios:
       network:
         - "default"
       os: "el96"
-    variables:
-      USHIFT_HOST: "host1"
-      USHIFT_USER: "root"
     destroy_vm: false

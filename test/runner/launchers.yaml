@@ -1,20 +1,14 @@
 launchers:
   # Standard launcher for RHEL 9.6 with kickstart template
-  - name: el96-src@standard-vm
+  - name: el96-src@standard
     description: |
       Standard launcher for RHEL 9.6 VMs using kickstart template.
-      Suitable for most test scenarios.
     config:
       cpu: 2
       memory: 4096
       network:
         - "default"
-    variables:
-      PULL_SECRET: "${HOME}/.pull-secret.json"
-      BOOT_BLUEPRINT: "rhel-9.6"
-      VM_BOOT_TIMEOUT: 1200
-      VM_GREENBOOT_TIMEOUT: 1800
-    base_image: "rhel-9.6-microshift-source"
-    kickstart_file: "kickstart.ks.template"
-    overrides: |-
-      Example script. this should be the content for the create_vms section.
+      kickstart: kickstart.ks.template
+      base: rhel-9.6-microshift-source
+      os: el96
+      blueprint: rhel-9.6

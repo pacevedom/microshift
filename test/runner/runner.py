@@ -24,6 +24,7 @@ TESTDIR=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ROOTDIR=os.path.dirname(TESTDIR)
 IMAGEDIR=os.path.join(ROOTDIR, "_output", "test-images")
 VMDIR=os.path.join(IMAGEDIR, "scenario-info")
+DEFAULT_HOSTNAME="host1"
 
 # Configure logging
 logging.basicConfig(
@@ -45,12 +46,16 @@ class VMStatus(Enum):
 @dataclass
 class VMConfig:
     """VM configuration requirements.
-    cpu: number of CPUs
-    memory: memory in MB
-    network: list of network names
-    optionals: list of optional packages to install
-    fips: whether to enable FIPS mode
-    os: operating system to use. Can be el94, el96, el100...
+    cpu: number of CPUs. Used for VM creation and test matching.
+    memory: memory in MB. Used for VM creation and test matching.
+    network: list of network names. Used for VM creation and test matching.
+    optionals: list of optional packages to install. Used for test matching.
+    fips: whether to enable FIPS mode. Used for VM creation and test matching.
+    os: operating system to use. Can be el94, el96, el100... Used for scenario matching.
+    disk_size: disk size in GB. Used for VM creation.
+    kickstart: kickstart file to use. Used for VM creation.
+    blueprint: blueprint to use. Used for VM creation.
+    base: base image to use. Used for VM creation.
     """
     cpu: int = 2
     memory: int = 4096  # in MB
@@ -58,21 +63,47 @@ class VMConfig:
     optionals: bool = False
     fips: bool = False
     os: str = None
+    disk_size: int = 20 # in GB
+    kickstart: str = None
+    blueprint: str = None
+    base: str = None
 
-    def __post_init__(self):
-        if self.packages is None:
-            self.packages = []
+    def __init__(self, config: Dict[str, Any]):
+        self.cpu = config.get("cpu", 2)
+        self.memory = config.get("memory", 4096)
+        self.network = config.get("network", None)
+        self.optionals = config.get("optionals", False)
+        self.fips = config.get("fips", False)
+        self.os = config.get("os", None)
+        self.disk_size = config.get("disk_size", 20)
+        self.kickstart = config.get("kickstart", None)
+        self.blueprint = config.get("blueprint", None)
+        self.base = config.get("base", None)
 
 
 def match_config(required_config: VMConfig, test_config: VMConfig) -> bool:
-    """Check if the test configuration matches the required configuration."""
-    #TODO review this. also use it as part of hte launcher selection and test-VM matching
-    return all(required_config.cpu >= test_config.cpu,
-               required_config.memory >= test_config.memory,
-               required_config.network == test_config.network,
-               required_config.optionals == test_config.optionals,
-               required_config.fips == test_config.fips,
-               required_config.os == test_config.os)
+    """Check if the test configuration matches the required configuration.
+    Args:
+        required_config: Required base configuration
+        test_config: Test configuration to match against the base configuration
+
+    Returns:
+        True if the test configuration matches the required configuration, False otherwise
+    """
+    ok_cpu = test_config.cpu >= required_config.cpu
+    ok_memory = test_config.memory >= required_config.memory
+    if test_config.network is None:
+        ok_network = True
+    elif required_config.network is None:
+        ok_network = False
+    else:
+        ok_network = all(net in test_config.network for net in required_config.network)
+
+    ok_fips = test_config.fips == required_config.fips
+    ok_os = test_config.os == required_config.os
+    ok_optionals = test_config.optionals == required_config.optionals
+    logger.info(f"Matching config: cpu={ok_cpu}, memory={ok_memory}, network={ok_network}, fips={ok_fips}, os={ok_os}, optionals={ok_optionals}")
+    return all([ok_cpu, ok_memory, ok_network, ok_fips, ok_os, ok_optionals])
 
 @dataclass
 class Scenario:
@@ -84,6 +115,43 @@ class Scenario:
     vm_config: VMConfig
     is_upgrade: bool = False
 
+    def generate_test_script(self) -> str:
+        """
+        Generate a new test execution script with only the scenario_run_tests function.
+
+        Returns:
+            Path to the generated test script file
+        """
+        variables_args = ' '.join([f"--variable \"{key}:{value}\"" for key, value in self.variables.items()])
+        suites_args = ' '.join(self.suites)
+        scenario_run_tests = (
+            f"scenario_run_tests() {{\n"
+            f"    run_tests {DEFAULT_HOSTNAME} {variables_args} {suites_args}\n"
+            f"}}\n"
+        )
+
+        scenario_dir = os.path.join(VMDIR, self.name)
+        os.makedirs(scenario_dir, exist_ok=True)
+        test_script_path = os.path.join(scenario_dir, f"{self.name}.sh")
+
+        script_content = (
+            "#!/bin/bash\n"
+            "#\n"
+            "# Auto-generated test script for scenario execution\n"
+            "# This script is generated by the test runner\n"
+            "#\n\n"
+            "# Sourced from scenario.sh and uses functions defined there.\n\n"
+            f"{scenario_run_tests}"
+        )
+
+        # Write the new test script
+        with open(test_script_path, 'w') as f:
+            f.write(script_content)
+
+        os.chmod(test_script_path, 0o755)
+        logger.info(f"Generated test script at: {test_script_path}")
+        return test_script_path
+
 
 @dataclass
 class Launcher:
@@ -91,9 +159,81 @@ class Launcher:
     name: str
     description: str
     variables: Dict[str, Any]
-    base_image: str
-    kickstart_file: str
     vm_config: VMConfig
+
+    def generate_scenario_script(self, vm_id:str) -> str:
+        """
+        Generate a temporary scenario script file for VM creation.
+
+        Returns:
+            Path to the generated scenario script file
+        """
+        vm_dir = os.path.join(VMDIR, f"{self.name}{vm_id}")
+        #vm_dir = os.path.join(VMDIR, self.name)
+        os.makedirs(vm_dir, exist_ok=True)
+        scenario_script_path = os.path.join(vm_dir, f"{self.name}{vm_id}.sh")
+        fd = os.open(scenario_script_path, os.O_RDWR | os.O_CREAT | os.O_TRUNC, 0o600)
+
+        try:
+            launch_vm_args = [
+                f"--vmname {DEFAULT_HOSTNAME}",
+                f"--vm_vcpus {self.vm_config.cpu}",
+                f"--vm_memory {self.vm_config.memory}",
+                f"--vm_disksize {self.vm_config.disk_size}",
+            ]
+            prepare_kickstart_args = [
+                DEFAULT_HOSTNAME,
+                self.vm_config.kickstart,
+                self.vm_config.base,
+            ]
+
+            boot_blueprint = self.vm_config.blueprint
+            if boot_blueprint:
+                launch_vm_args.append(f"--boot_blueprint {self.vm_config.blueprint}")
+
+            if self.vm_config.fips:
+                prepare_kickstart_args.append("true")
+                launch_vm_args.append("--fips")
+
+            if self.vm_config.network:
+                launch_vm_args.append(f"--network {','.join(self.vm_config.network)}")
+                if len(self.vm_config.network) == 1 and self.vm_config.network[0] == "ipv6":
+                    prepare_kickstart_args.append("true")
+            else:
+                launch_vm_args.append("--no-network")
+
+            scenario_create_vms = (
+                f"scenario_create_vms() {{\n"
+                f"    prepare_kickstart {' '.join(prepare_kickstart_args)}\n"
+                f"    launch_vm {' '.join(launch_vm_args)}\n"
+                f"}}\n\n"
+            )
+
+            scenario_remove_vms = (
+                f"scenario_remove_vms() {{\n"
+                f"    remove_vm {DEFAULT_HOSTNAME}\n"
+                f"}}\n\n"
+            )
+
+            script_content = (
+                "#!/bin/bash\n"
+                "#\n"
+                "# Auto-generated scenario script for VM creation\n"
+                "# This script is generated by the test runner\n"
+                "#\n\n"
+                "# Sourced from scenario.sh and uses functions defined there.\n\n"
+                f"{scenario_create_vms}"
+                f"{scenario_remove_vms}"
+            )
+
+            with os.fdopen(fd, 'w') as f:
+                f.write(script_content)
+            os.chmod(scenario_script_path, 0o755)
+            logger.debug(f"Generated scenario script at: {scenario_script_path}")
+            return scenario_script_path
+
+        except Exception as e:
+                raise RuntimeError(f"Failed to generate scenario script: {e}") from e
 
 
 @dataclass
@@ -101,10 +241,10 @@ class VM:
     """VM instance representation."""
     vm_id: str
     name: str
+    hostname: str = "host1"
     status: VMStatus = VMStatus.CREATING
     lock: threading.Lock = None
     scenario_script_path: Optional[str] = None
-    launcher: Optional['Launcher'] = None
     ip_address: Optional[str] = None
     config: VMConfig = None
 
@@ -112,24 +252,6 @@ class VM:
         if self.lock is None:
             self.lock = threading.Lock()
 
-
-    def matches_requirements(self, required_config: VMConfig) -> bool:
-        """Check if this VM matches the required configuration."""
-
-        ok_cpu = self.config.cpu >= required_config.cpu
-        ok_memory = self.config.memory >= required_config.memory
-        if required_config.network is None:
-            ok_network = True
-        elif self.config.network is None:
-            ok_network = False
-        else:
-            ok_network = all(net in self.config.network for net in required_config.network)
-
-        ok_fips = self.config.fips == required_config.fips
-        ok_baseimage = self.launcher.base_image == required_config.base_image
-        ok_optionals = self.config.optionals == required_config.optionals
-
-        return all(ok_cpu, ok_memory, ok_network, ok_fips, ok_baseimage, ok_optionals)
 
     def get_vm_ip(self) -> Optional[str]:
         """
@@ -142,14 +264,12 @@ class VM:
             logger.warning(f"VM {self.vm_id} has no name, cannot get IP")
             return None
 
-        # VM name in scenario is "host1"
-        vmname = "host1"
-        #TODO dont need this. must be different path.
+        base_dir = os.path.dirname(self.scenario_script_path)
+
         ip_file = os.path.join(
-            VMDIR,
-            self.name,
+            base_dir,
             "vms",
-            vmname,
+            self.hostname,
             "ip"
         )
 
@@ -167,80 +287,6 @@ class VM:
         except Exception as e:
             logger.error(f"Error reading IP file {ip_file}: {e}")
             return None
-
-    def generate_scenario_script(self) -> str:
-        """
-        Generate a temporary scenario script file for VM creation.
-
-        Returns:
-            Path to the generated scenario script file
-        """
-        if not self.launcher:
-            raise ValueError("Launcher must be set before generating scenario script")
-
-        os.makedirs(os.path.join(VMDIR, self.name), exist_ok=True)
-        scenario_script_path = os.path.join(VMDIR, f"{self.name}.sh")
-        fd = os.open(scenario_script_path, os.O_RDWR | os.O_CREAT | os.O_TRUNC, 0o600)
-
-        try:
-            vmhostname = "host1"
-            launch_args = [
-                f"--vmname {vmhostname}",
-                f"--vm_vcpus {self.config.cpu}",
-                f"--vm_memory {self.config.memory}",
-            ]
-
-            #TODO rework this one. need to get blueprints, kickstarts, networks, cpu etc from the config.
-            # it might even reference variables from the scenario/common.sh files. dont even replace them, the scripts will handle.
-            boot_blueprint = self.launcher.variables.get("BOOT_BLUEPRINT")
-            if boot_blueprint:
-                launch_args.append(f"--boot_blueprint {boot_blueprint}")
-
-            if self.config.network:
-                launch_args.append(f"--network {self.config.network}")
-            else:
-                launch_args.append("--network default")
-
-            fips_enabled = self.launcher.variables.get("FIPS_MODE", "false").lower() == "true"
-            fips_kickstart = "true" if fips_enabled else "false"
-            if fips_enabled:
-                launch_args.append("--fips")
-
-            scenario_create_vms = (
-                f"scenario_create_vms() {{\n"
-                f"    prepare_kickstart {vmhostname} {self.launcher.kickstart_file} {self.launcher.base_image} {fips_kickstart}\n"
-                f"    launch_vm {' '.join(launch_args)}\n"
-                f"}}\n\n"
-            )
-
-            scenario_remove_vms = (
-                f"scenario_remove_vms() {{\n"
-                f"    remove_vm {vmhostname}\n"
-                f"}}\n\n"
-            )
-
-            script_content = (
-                "#!/bin/bash\n"
-                "#\n"
-                "# Auto-generated scenario script for VM creation\n"
-                "# This script is generated by the test runner\n"
-                "#\n\n"
-                "# Sourced from scenario.sh and uses functions defined there.\n\n"
-                f"{scenario_create_vms}"
-                f"{scenario_remove_vms}"
-            )
-
-            with os.fdopen(fd, 'w') as f:
-                f.write(script_content)
-            # Make the script executable
-            os.chmod(scenario_script_path, 0o755)
-
-            logger.debug(f"Generated scenario script at: {scenario_script_path}")
-            return scenario_script_path
-
-        except Exception as e:
-                raise RuntimeError(f"Failed to generate scenario script: {e}") from e
-
 
 
 class VMManager:
@@ -261,6 +307,8 @@ class VMManager:
         self.available_vms: Queue = Queue()
         self.available_cpus = 0
         self.available_memory = 0
+        self.created_vms = 0
+        self.destroyed_vms = 0
 
     def find_available_vm(self, required_config: VMConfig) -> Optional[VM]:
         """
@@ -274,7 +322,7 @@ class VMManager:
         """
         for vm in self.vms.values():
             if (vm.status == VMStatus.AVAILABLE and
-                    vm.matches_requirements(required_config)):
+                    match_config(required_config, vm.config)):
                 return vm
         return None
 
@@ -296,7 +344,6 @@ class VMManager:
                     return vm
                 logger.info(f"No available VM found, checking if we can create one")
                 if self.can_create_vm(required_config):
-                    #TODO this required config argument is wrong. need to reconcile launcher and required one.
                     return self.create_vm(required_config, launcher)
             logger.info("No available VM found, waiting...")
             time.sleep(5)
@@ -330,16 +377,16 @@ class VMManager:
             vm_id=vm_id,
             name=f"{launcher.name}{vm_id}",
             config=vm_config,
-            status=VMStatus.CREATING,
-            launcher=launcher
+            status=VMStatus.CREATING
         )
 
         logger.info(f"Creating VM {vm_id}")
 
         try:
-            scenario_script = vm.generate_scenario_script()
+            scenario_script = launcher.generate_scenario_script(vm_id)
             vm.scenario_script_path = scenario_script
             logger.info(f"Scenario script path: {scenario_script}")
+            #TODO this should be a constant at the top of the file
             scenario_sh_path = os.path.join(TESTDIR, "bin", "scenario.sh")
             if not os.path.exists(scenario_sh_path):
                 raise FileNotFoundError(
@@ -349,13 +396,15 @@ class VMManager:
             # Call scenario.sh create with the generated script
             logger.info(f"Creating virtual machine {vm.name} with script: {scenario_script}")
 
-            #TODO need to store the logs in a file. same directory.
-            result = subprocess.run(
-                [scenario_sh_path, "create", scenario_script],
-                capture_output=True,
-                text=True,
-                check=False
-            )
+            log_file_path = os.path.join(os.path.dirname(scenario_script), "create.log")
+            with open(log_file_path, "w") as log_file:
+                result = subprocess.run(
+                    [scenario_sh_path, "create", scenario_script],
+                    stdout=log_file,
+                    stderr=log_file,
+                    text=True,
+                    check=False
+                )
 
             if result.returncode != 0:
                 error_msg = (
@@ -373,6 +422,7 @@ class VMManager:
             vm.ip_address = vm_ip
             vm.status = VMStatus.BUSY
             self.vms[vm_id] = vm
+            self.created_vms += 1
             logger.info(f"VM {vm.vm_id}:{vm.name} created successfully with IP: {vm.ip_address}. Ready for tests")
             return vm
 
@@ -445,6 +495,7 @@ class VMManager:
                     f"STDERR: {result.stderr}"
                 )
             else:
+                self.destroyed_vms += 1
                 logger.info(f"VM {vm.vm_id} cleaned up successfully")
 
         except Exception as e:
@@ -486,15 +537,7 @@ class TestRunner:
         scenarios = []
         for scenario_data in data.get('scenarios', []):
             vm_config_data = scenario_data.get('config', {})
-            vm_config = VMConfig(
-                cpu=vm_config_data.get('cpu', 2),
-                memory=vm_config_data.get('memory', 4096),
-                network=vm_config_data.get('network', None),
-                optionals=vm_config_data.get('optionals', False),
-                fips=vm_config_data.get('fips', False)
-                os=vm_config_data.get('os', None)
-            )
-
+            vm_config = VMConfig(vm_config_data)
             scenario = Scenario(
                 name=scenario_data['name'],
                 description=scenario_data.get('description', ''),
@@ -520,16 +563,7 @@ class TestRunner:
                 name=launcher_data['name'],
                 description=launcher_data.get('description', ''),
                 variables=launcher_data.get('variables', {}),
-                base_image=launcher_data['base_image'],
-                kickstart_file=launcher_data['kickstart_file'],
-                vm_config=VMConfig(
-                    cpu=launcher_data['vm_config']['cpu'],
-                    memory=launcher_data['vm_config']['memory'],
-                    network=launcher_data['vm_config']['network'],
-                    optionals=launcher_data['vm_config']['optionals'],
-                    fips=launcher_data['vm_config']['fips'],
-                    os=launcher_data['vm_config']['os']
-                )
+                vm_config=VMConfig(launcher_data.get('config', {}))
             )
             launchers[launcher.name] = launcher
 
@@ -547,62 +581,11 @@ class TestRunner:
         Returns:
             Selected launcher
         """
-        #TODO this is all wrong. a launcher should be selected based on the config of the scenario.
-        # this is as simple as taking configuration requirements and see which one matches the launcher?
-        # yeah.
-
-        default_launcher_name = "el96-src@standard-vm"
-
-        if default_launcher_name in self.launchers:
-            return self.launchers[default_launcher_name]
-
-        # Fallback to first available launcher
-        if self.launchers:
-            return next(iter(self.launchers.values()))
+        for launcher in self.launchers.values():
+            if match_config(required_config, launcher.vm_config):
+                return launcher
 
         raise ValueError("No launchers available")
-
-    def generate_test_script(self, scenario: Scenario) -> str:
-        """
-        Generate a new test execution script with only the scenario_run_tests function.
-
-        Args:
-            scenario: The scenario configuration object
-
-        Returns:
-            Path to the generated test script file
-        """
-        vmhostname = "host1"
-
-        # Generate scenario_run_tests function
-        suites_args = ' '.join(scenario.suites)
-        scenario_run_tests = (
-            f"scenario_run_tests() {{\n"
-            f"    run_tests {vmhostname} {suites_args}\n"
-            f"}}\n"
-        )
-
-        test_script_path = os.path.join(VMDIR, f"{scenario.name}.sh")
-
-        script_content = (
-            "#!/bin/bash\n"
-            "#\n"
-            "# Auto-generated test script for scenario execution\n"
-            "# This script is generated by the test runner\n"
-            "#\n\n"
-            "# Sourced from scenario.sh and uses functions defined there.\n\n"
-            f"{scenario_run_tests}"
-        )
-
-        # Write the new test script
-        with open(test_script_path, 'w') as f:
-            f.write(script_content)
-
-        # Make the script executable
-        os.chmod(test_script_path, 0o755)
-
-        logger.debug(f"Generated test script at: {test_script_path}")
-        return test_script_path
 
     def run_test(self, scenario: Scenario) -> bool:
         """
@@ -616,12 +599,9 @@ class TestRunner:
         """
         logger.info(f"Starting test: {scenario.name}")
 
-        # Select a launcher for this scenario. Pick the simplest match. Or first match?
+        # selected launcher for the scenario, in case there is no available VM.
         launcher = self.select_launcher(scenario.vm_config)
 
-        # Find or create a VM
-        #TODO launchers should be part of the vm manager. i might even be able to know which vm i should target beforehand...
-        # that should happen before calling this function though.
         vm = self.vm_manager.wait_for_available_vm(scenario.vm_config, launcher)
         logger.info(f"VM {vm.vm_id} found for test: {scenario.name}")
 
@@ -642,25 +622,25 @@ class TestRunner:
                 test_passed = False
                 return test_passed
 
-            test_script_path = self.generate_test_script(scenario)
+            test_script_path = scenario.generate_test_script()
 
             logger.info(
                 f"Calling scenario.sh run with script: {test_script_path} "
                 f"and RUN_HOST_OVERRIDE={vm.ip_address}"
             )
-            #TODO where do i store the logs?
-            result = subprocess.run(
-                [scenario_sh_path, "run", test_script_path, vm.ip_address],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
+            log_file_path = os.path.join(os.path.dirname(test_script_path), "run.log")
+            with open(log_file_path, "w") as log_file:
+                result = subprocess.run(
+                    [scenario_sh_path, "run", test_script_path, vm.ip_address],
+                    stdout=log_file,
+                    stderr=log_file,
+                    text=True,
+                    check=False,
+                )
             if result.returncode != 0:
                 error_msg = (
                     f"Test execution failed for scenario {scenario.name}. "
                     f"Return code: {result.returncode}\n"
-                    f"STDOUT: {result.stdout}\n"
-                    f"STDERR: {result.stderr}"
                 )
                 logger.error(error_msg)
                 test_passed = False
@@ -758,6 +738,8 @@ class TestRunner:
         for vm in vms_to_destroy:
             self.vm_manager.destroy_vm(vm)
 
+        logger.info(f"Created VMs: {self.vm_manager.created_vms}")
+        logger.info(f"Destroyed VMs: {self.vm_manager.destroyed_vms}")
         logger.info("Test run completed")
 
 
@@ -772,12 +754,10 @@ def get_total_memory_mb() -> int:
         with open('/proc/meminfo', 'r') as f:
             meminfo = f.read()
 
-        # Parse MemTotal
         for line in meminfo.split('\n'):
             if line.startswith('MemTotal:'):
                 parts = line.split()
                 if len(parts) >= 2:
-                    # Values in /proc/meminfo are in KB, convert to MB
                     mem_total_kb = int(parts[1])
                     return mem_total_kb // 1024
 
@@ -840,8 +820,6 @@ def main():
         total_cpus=cpu_count-args.reserved_cpus,
         total_memory=total_memory_mb-args.reserved_memory
     )
-    #TODO all strings should be replaced with os.path.expandvars to handle env vars from common.sh. so this should be in its shell script to launch.
-    # maybe not. just leave it like that.
     runner.run()
 
 
