@@ -200,7 +200,9 @@ func (kl *Kubelet) listPodsFromDisk() ([]types.UID, error) {
 // https://github.com/kubernetes/kubernetes/issues/104824
 func (kl *Kubelet) GetActivePods() []*v1.Pod {
 	allPods := kl.podManager.GetPods()
+	klog.InfoS("DEBUG: GetActivePods called", "totalPods", len(allPods))
 	activePods := kl.filterOutInactivePods(allPods)
+	klog.InfoS("DEBUG: GetActivePods returning", "activePods", len(activePods), "filteredOut", len(allPods)-len(activePods))
 	return activePods
 }
 
@@ -1135,7 +1137,16 @@ func (kl *Kubelet) filterOutInactivePods(pods []*v1.Pod) []*v1.Pod {
 		}
 
 		// terminal pods are considered inactive UNLESS they are actively terminating
-		if kl.isAdmittedPodTerminal(p) && !kl.podWorkers.IsPodTerminationRequested(p.UID) {
+		isTerminal := kl.isAdmittedPodTerminal(p)
+		terminationRequested := kl.podWorkers.IsPodTerminationRequested(p.UID)
+		willFilter := isTerminal && !terminationRequested
+
+		klog.InfoS("DEBUG: filterOutInactivePods decision", "pod", klog.KObj(p),
+			"isTerminal", isTerminal, "terminationRequested", terminationRequested,
+			"willFilter", willFilter, "podPhase", p.Status.Phase)
+
+		if isTerminal && !terminationRequested {
+			klog.InfoS("DEBUG: FILTERING OUT pod", "pod", klog.KObj(p))
 			continue
 		}
 
@@ -1154,15 +1165,21 @@ func (kl *Kubelet) isAdmittedPodTerminal(pod *v1.Pod) bool {
 	// terminal phase (if the Kubelet recorded that the pod reached a terminal
 	// phase the pod should never be restarted)
 	if pod.Status.Phase == v1.PodSucceeded || pod.Status.Phase == v1.PodFailed {
+		klog.InfoS("DEBUG: Pod terminal via pod.Status.Phase", "pod", klog.KObj(pod), "phase", pod.Status.Phase)
 		return true
 	}
 	// a pod that has been marked terminal within the Kubelet is considered
 	// inactive (may have been rejected by Kubelet admission)
 	if status, ok := kl.statusManager.GetPodStatus(pod.UID); ok {
+		klog.InfoS("DEBUG: Pod statusManager check", "pod", klog.KObj(pod), "statusPhase", status.Phase, "podPhase", pod.Status.Phase)
 		if status.Phase == v1.PodSucceeded || status.Phase == v1.PodFailed {
+			klog.InfoS("DEBUG: Pod terminal via statusManager", "pod", klog.KObj(pod), "statusPhase", status.Phase)
 			return true
 		}
+	} else {
+		klog.InfoS("DEBUG: Pod statusManager NOT FOUND", "pod", klog.KObj(pod), "podPhase", pod.Status.Phase)
 	}
+	klog.InfoS("DEBUG: Pod NOT terminal", "pod", klog.KObj(pod), "podPhase", pod.Status.Phase)
 	return false
 }
 

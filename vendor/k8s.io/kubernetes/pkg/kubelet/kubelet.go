@@ -2416,6 +2416,7 @@ func (kl *Kubelet) rejectPod(pod *v1.Pod, reason, message string) {
 		Phase:    v1.PodFailed,
 		Reason:   reason,
 		Message:  "Pod was rejected: " + message})
+	klog.InfoS("DEBUG: Pod rejected, statusManager updated", "pod", klog.KObj(pod), "reason", reason)
 }
 
 func recordAdmissionRejection(reason string) {
@@ -2692,6 +2693,7 @@ func (kl *Kubelet) HandlePodAdditions(pods []*v1.Pod) {
 			// We failed pods that we rejected, so activePods include all admitted
 			// pods that are alive.
 			if ok, reason, message := kl.allocationManager.AddPod(kl.GetActivePods(), pod); !ok {
+				klog.InfoS("DEBUG: Pod admission FAILED, about to reject", "pod", klog.KObj(pod), "reason", reason)
 				kl.rejectPod(pod, reason, message)
 				// We avoid recording the metric in canAdmitPod because it's called
 				// repeatedly during a resize, which would inflate the metric.
