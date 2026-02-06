@@ -1,61 +1,84 @@
-The following guiding principles should be used when adding more artifacts to
-each layer or group under `test/image-blueprints` directory.
+# OSTree Image Blueprints
 
-> Important: Keep balanced build times within each group and maximize caching
-> of artifacts independent of the current source code.
+This directory contains OSTree image blueprints organized by layers. Each layer
+represents a different build context (base, presubmit, periodic, release).
 
-## OSTree Base Layer
+## Build System
 
-Artifacts built in this layer are cached.
+The image build system uses **DAG-based scheduling** to maximize parallelism.
+Instead of building images sequentially in groups, the scheduler:
 
-Groups 1-to-3 enforce an ordered build chain, necessary to satisfy a mandatory
-layer dependency of `rhel94 os-only -> rhel94 y-2 -> rhel94 y-1`, which is needed
-for testing upgrades.
+1. Parses all blueprints to extract parent-child relationships
+2. Builds a dependency graph (DAG)
+3. Starts builds as soon as their parent completes
+4. Maximizes concurrent builds while respecting dependencies
 
-|Group |Build Time|Description|
-|------|----------|-----------|
-|group1| Short    | RHEL 9.4 and 9.6 OS-only base layer
-|group2| Short    | RHEL 9.4 layer with MicroShift `y-2` packages
-|group3| Short    | RHEL 9.4 layer with MicroShift `y-1` packages
-|group4| Average  | Other artifacts independent of current sources
+### Parent Relationships
 
-> Note: Total build times are up to 30 minutes.
+Parent dependencies are defined in two ways:
 
-## OSTree Presubmit Layer
+1. **Explicit directive** in the blueprint file:
+   ```toml
+   # parent = rhel-9.6-microshift-4.17
+   name = "rhel-9.6-microshift-4.18"
+   ```
 
-Artifacts built in this layer cannot be cached as they depend on the current sources.
-The artifacts are used by pre-submit and periodic CI jobs.
+2. **Filename prefix convention**:
+   - `rhel96-microshift-source.toml` derives parent from `rhel96.toml`
 
-|Group |Build Time|Description|
-|------|----------|-----------|
-|group1| Average  | Current source prerequisites used in pre-submits and periodics
+## Layer Descriptions
 
-> Note: Total build times are up to 10 minutes.
+### layer1-base (Cached)
 
-## OSTree Periodic Layer
+Base layer artifacts that are independent of current source code.
 
-Artifacts built in this layer cannot be cached as they depend on the current sources.
-The artifacts are only used by periodic CI jobs.
+| Blueprint | Description |
+|-----------|-------------|
+| `rhel96.toml` | RHEL 9.6 OS-only base image |
+| `rhel96-microshift-yminus2.toml` | RHEL 9.6 with MicroShift y-2 packages |
+| `rhel96-microshift-previous-minor.toml` | RHEL 9.6 with MicroShift y-1 packages |
+| `rhel96-crel.toml` | RHEL 9.6 current release |
 
-|Group |Build Time|Description|
-|------|----------|-----------|
-|group1| Average  | Current source prerequisites used only in periodics
+### layer2-presubmit (Not Cached)
 
-> Note: Total build times are up to 15 minutes.
+Artifacts that depend on current sources, used by presubmit and periodic jobs.
 
-## OSTree Release Layer
+| Blueprint | Description |
+|-----------|-------------|
+| `*-source*.toml` | Current source-based images |
 
-Artifacts built in this layer are cached as they depend on Brew RPM packages available only behind the VPN.
+### layer3-periodic (Not Cached)
 
-Groups 1-to-2 enforce an ordered build chain, necessary to satisfy a mandatory
-layer dependency of `rhel96 os-only -> rhel96 y-2 -> rhel96 y-1`, which is needed
-for testing upgrades.
+Artifacts that depend on current sources, used only by periodic jobs.
 
-|Group |Build Time|Description|
-|------|----------|-----------|
-|group1| Short    | RHEL 9.6 layer with MicroShift `y-2` Brew packages
-|group2| Short    | RHEL 9.6 layer with MicroShift `y-1` Brew packages
-|group3| Average  | Brew RPM blueprints for release testing (EC, RC, z-stream, nightly, tuned)
-|group4| Average  | Image installers for release testing (EC, RC, z-stream)
+| Blueprint | Description |
+|-----------|-------------|
+| Various | Periodic-only test images |
 
-> Note: Total build times are up to 15 minutes.
+### layer4-release (Cached)
+
+Release artifacts that depend on Brew RPM packages (VPN required).
+
+| Blueprint | Description |
+|-----------|-------------|
+| `*-brew*.toml` | Brew-based release images |
+| `*.image-installer` | ISO installer images |
+
+## Running Builds
+
+```bash
+# Build a specific layer
+./test/bin/build_images.sh -l test/image-blueprints/layer1-base
+
+# Build all layers
+./test/bin/build_images.sh
+
+# Force rebuild of existing images
+./test/bin/build_images.sh -f
+
+# Build only source images
+./test/bin/build_images.sh -s
+
+# Disable DAG scheduling (legacy mode)
+USE_DAG=false ./test/bin/build_images.sh
+```

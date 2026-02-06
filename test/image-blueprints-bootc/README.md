@@ -1,64 +1,120 @@
-The following guiding principles should be used when adding more artifacts to
-each layer or group under `test/image-blueprints-bootc` directory.
+# Bootc Image Blueprints
 
-> Important: Keep balanced build times within each group and maximize caching
-> of artifacts independent of the current source code.
+This directory contains bootc container image blueprints organized by layers.
+Each layer represents a different build context (base, presubmit, periodic, etc.).
 
-## Bootc Base Layer
+## Build System
 
-Artifacts built in this layer are cached.
+The image build system uses **DAG-based scheduling** to maximize parallelism.
+Instead of building images sequentially in groups, the scheduler:
 
-|Group |Build Time|Description|
-|------|----------|-----------|
-|group1| Short    | Basic prerequisites
-|group2| Long     | Artifacts independent of current sources
+1. Parses all blueprints to extract parent-child relationships
+2. Builds a dependency graph (DAG)
+3. Starts builds as soon as their parent completes
+4. Maximizes concurrent builds while respecting dependencies
 
-The `y-2` and `y-1` upgrade tests depend on `ostree` commits when running
-scenarios, not during container image builds. These commits must be downloaded
-from cache locally for all `bootc` test scenarios to execute successfully.
+### Parent Relationships
 
-> Note: Total build times are up to 10 minutes.
+Parent dependencies are extracted from the build files:
 
-## Bootc Presubmit layer
+1. **Containerfiles**: Parsed from the `FROM` directive
+   ```dockerfile
+   FROM localhost/rhel96-test-agent:latest
+   ```
+   The `localhost/` prefix indicates a local dependency.
 
-Artifacts built in this layer cannot be cached as they depend on the current sources.
+2. **.image-bootc files**: Parsed from the file content
+   ```
+   localhost/rhel96-bootc-source:latest
+   ```
 
-|Group |Build Time|Description|
-|------|----------|-----------|
-|group1| Short    | Current source prerequisites on RHEL used in presubmits and periodics
-|group2| Short    | Current source artifacts on RHEL used in presubmits and periodics
+External images (e.g., `registry.redhat.io/...`) have no local parent dependency.
 
-> Note: Total build times are up to 5 minutes.
+## File Types
 
-## Bootc Periodic Layer
+| Extension | Description |
+|-----------|-------------|
+| `.containerfile` | Podman container build file |
+| `.image-bootc` | Reference to image for bootc-image-builder (ISO creation) |
+| `.container-encapsulate` | RPM-ostree container encapsulation target |
+| `.template` | Gomplate template (processed before builds) |
 
-Artifacts built in this layer cannot be cached as they depend on the current sources.
+## Layer Descriptions
 
-|Group |Build Time|Description|
-|------|----------|-----------|
-|group1| Average  | Current source prerequisites on RHEL used only in periodics
-|group2| Average  | Current source artifacts on RHEL used only in periodics
+### layer1-base (Cached)
 
-> Note: Total build times are up to 15 minutes.
+Base layer artifacts independent of current source code.
 
-## Bootc Upstream Layer
+| Blueprint | Description |
+|-----------|-------------|
+| `rhel96-test-agent.containerfile` | Test agent base image |
+| `rhel96-bootc.image-bootc` | Base bootc ISO |
 
-Artifacts built in this layer cannot be cached as they depend on the current sources.
+### layer2-presubmit (Not Cached)
 
-|Group |Build Time|Description|
-|------|----------|-----------|
-|group1| Average  | Current source prerequisites on CentOS used only in upstream
-|group2| Average  | Current source artifacts on CentOS used only in upstream
+Artifacts that depend on current sources, used by presubmit and periodic jobs.
 
-> Note: Total build times are up to 15 minutes.
+| Blueprint | Description |
+|-----------|-------------|
+| `rhel96-bootc-source.containerfile` | Source-based bootc image |
+| `rhel96-bootc-source-optionals.containerfile` | With optional packages |
 
-## Bootc Release Layer
+### layer3-periodic (Not Cached)
 
-Artifacts built in this layer are cached as they depend on Brew RPM packages available only behind the VPN.
+Artifacts that depend on current sources, used only by periodic jobs.
 
-|Group |Build Time|Description|
-|------|----------|-----------|
-|group1| Average  | Bootc images from for release testing (EC, RC, z-stream, y-1, y-2) including all microshift RPMs.
-|group2| Average  | Bootc images from previous group plus special config (FIPS, tuned) and image installers.
+| Blueprint | Description |
+|-----------|-------------|
+| `*-isolated.containerfile` | Isolated network testing |
+| `*-gitops.containerfile` | GitOps testing |
 
-> Note: Total build times are up to 15 minutes.
+### layer4-upstream (Not Cached)
+
+CentOS-based artifacts for upstream testing.
+
+| Blueprint | Description |
+|-----------|-------------|
+| `cos9-*.containerfile` | CentOS 9 based images |
+| `cos10-*.containerfile` | CentOS 10 based images |
+
+### layer5-release (Cached)
+
+Release artifacts that depend on Brew RPM packages (VPN required).
+
+| Blueprint | Description |
+|-----------|-------------|
+| `*-brew*.containerfile` | Brew-based release images |
+
+## Running Builds
+
+```bash
+# Build a specific layer
+./test/bin/build_bootc_images.sh -l test/image-blueprints-bootc/layer1-base
+
+# Build specific type only
+./test/bin/build_bootc_images.sh -l test/image-blueprints-bootc/layer2-presubmit -b containerfile
+
+# Force rebuild of existing images
+./test/bin/build_bootc_images.sh -l test/image-blueprints-bootc/layer1-base -f
+
+# Dry run (show what would be built)
+./test/bin/build_bootc_images.sh -l test/image-blueprints-bootc/layer1-base -d
+```
+
+## Dependency Chain Example
+
+```
+registry.redhat.io/rhel9/rhel-9.6-bootc:9.6  (external, no local dep)
+    |
+    v
+rhel96-test-agent.containerfile  (root node)
+    |
+    v
+rhel96-bootc-source.containerfile (parent: rhel96-test-agent)
+    |
+    v
+rhel96-bootc-source-optionals.containerfile (parent: rhel96-bootc-source)
+```
+
+With DAG scheduling, `rhel96-bootc-source-optionals` starts building immediately
+when `rhel96-bootc-source` completes, without waiting for other unrelated images.

@@ -13,6 +13,8 @@ import time
 import traceback
 
 import common
+import dag_scheduler
+from dag_scheduler import BuildNode, BuildStatus, BuildType, DAGScheduler
 
 # Global environment variables
 #
@@ -518,6 +520,171 @@ def process_container_encapsulate(groupdir, containerfile, dry_run):
         common.run_command(["sed", f"s/^/{ce_outname}: /", ce_logfile], dry_run)
 
 
+def process_single_build(node: BuildNode, dry_run: bool = False) -> bool:
+    """
+    Process a single build node.
+
+    Returns True on success, False on failure.
+    Raises exception on error.
+    """
+    file_path = node.file_path
+    file_name = os.path.basename(file_path)
+    group_dir = os.path.dirname(file_path)
+
+    if node.build_type == BuildType.CONTAINERFILE:
+        process_containerfile(group_dir, file_name, dry_run)
+    elif node.build_type == BuildType.IMAGE_BOOTC:
+        process_image_bootc(group_dir, file_name, dry_run)
+    elif node.build_type == BuildType.CONTAINER_ENCAPSULATE:
+        process_container_encapsulate(group_dir, file_name, dry_run)
+    else:
+        raise ValueError(f"Unknown build type: {node.build_type}")
+
+    return True
+
+
+def process_with_dag(base_dir: str, layers: list, build_type_filter: str = None,
+                     dry_run: bool = False) -> bool:
+    """
+    Process builds using DAG-based scheduling.
+
+    Starts builds as soon as their parent dependencies complete,
+    maximizing parallelism.
+
+    Args:
+        base_dir: Base directory containing layer directories
+        layers: List of layer names to process
+        build_type_filter: Optional filter for build type
+        dry_run: If True, skip actual build execution
+
+    Returns:
+        True on success, False if any builds failed
+    """
+    common.print_msg(f"Processing with DAG scheduler: layers={layers}")
+
+    # Discover all blueprints in the specified layers
+    nodes = dag_scheduler.discover_bootc_blueprints(base_dir, layers)
+
+    if not nodes:
+        common.print_msg("No blueprints found to build")
+        return True
+
+    # Filter by build type if specified
+    if build_type_filter:
+        type_map = {
+            "containerfile": BuildType.CONTAINERFILE,
+            "image-bootc": BuildType.IMAGE_BOOTC,
+            "container-encapsulate": BuildType.CONTAINER_ENCAPSULATE,
+        }
+        filter_type = type_map.get(build_type_filter)
+        if filter_type:
+            nodes = [n for n in nodes if n.build_type == filter_type]
+            common.print_msg(f"Filtered to {len(nodes)} nodes of type {build_type_filter}")
+
+    # Build the DAG
+    scheduler = dag_scheduler.build_dag_from_nodes(nodes)
+
+    # Print DAG structure for debugging
+    dag_scheduler.print_dag(scheduler)
+
+    # Process templates first (they're needed for containerfile builds)
+    for layer in layers:
+        layer_path = os.path.join(base_dir, layer)
+        if not os.path.isdir(layer_path):
+            continue
+        # Process templates in layer directory
+        _process_layer_templates(layer_path, dry_run)
+
+    # Initialize junit for DAG-based builds
+    # Use a synthetic "dag" group name
+    dag_logdir = os.path.join(common.get_env_var('IMAGEDIR'), "build-logs", "dag")
+    common.create_dir(dag_logdir)
+    common.start_junit(dag_logdir)
+
+    success = True
+    try:
+        # Use ThreadPoolExecutor for parallel execution with DAG ordering
+        max_workers = min(8, multiprocessing.cpu_count())
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures: dict = {}  # Future -> BuildNode
+
+            # Submit root nodes (no parent dependency)
+            for node in scheduler.get_ready_nodes():
+                common.print_msg(f"Submitting root node: {node.name}")
+                scheduler.mark_running(node.name)
+                future = executor.submit(process_single_build, node, dry_run)
+                futures[future] = node
+
+            # Process completions and submit children
+            while futures or scheduler.has_pending():
+                if not futures:
+                    # No running tasks but still have pending - shouldn't happen
+                    # unless there's a bug in dependency tracking
+                    common.print_msg("Warning: No running tasks but DAG has pending nodes")
+                    break
+
+                # Wait for at least one task to complete
+                done, _ = concurrent.futures.wait(
+                    futures.keys(),
+                    return_when=concurrent.futures.FIRST_COMPLETED
+                )
+
+                for future in done:
+                    node = futures.pop(future)
+                    try:
+                        future.result()
+                        common.print_msg(f"Completed: {node.name}")
+                        newly_ready = scheduler.mark_completed(node.name, success=True)
+
+                        # Submit newly ready children
+                        for child in newly_ready:
+                            common.print_msg(f"Submitting child: {child.name} (parent: {child.parent})")
+                            scheduler.mark_running(child.name)
+                            child_future = executor.submit(process_single_build, child, dry_run)
+                            futures[child_future] = child
+
+                    except Exception as e:
+                        common.print_msg(f"Failed: {node.name} - {e}")
+                        scheduler.mark_completed(node.name, success=False, error_message=str(e))
+                        success = False
+
+        # Report final status
+        summary = scheduler.get_summary()
+        common.print_msg(f"DAG Summary: {summary}")
+
+        failed_nodes = scheduler.get_failed_nodes()
+        if failed_nodes:
+            common.print_msg("Failed builds:")
+            for node in failed_nodes:
+                common.print_msg(f"  - {node.name}: {node.error_message}")
+
+        blocked_nodes = scheduler.get_blocked_nodes()
+        if blocked_nodes:
+            common.print_msg("Blocked builds (due to parent failures):")
+            for node in blocked_nodes:
+                common.print_msg(f"  - {node.name}: {node.error_message}")
+
+    finally:
+        common.close_junit()
+
+    return success
+
+
+def _process_layer_templates(layer_path: str, dry_run: bool) -> None:
+    """Process .template files in a layer directory."""
+    # Check for templates in layer root
+    for template in glob.glob(os.path.join(layer_path, "*.template")):
+        ofile = os.path.join(BOOTC_IMAGE_DIR, os.path.basename(template))
+        ofile = ofile.removesuffix(".template")
+        run_template_cmd(template, ofile, dry_run)
+
+    # Check for templates in group subdirectories (for backwards compatibility)
+    for template in glob.glob(os.path.join(layer_path, "*", "*.template")):
+        ofile = os.path.join(BOOTC_IMAGE_DIR, os.path.basename(template))
+        ofile = ofile.removesuffix(".template")
+        run_template_cmd(template, ofile, dry_run)
+
+
 def process_group(groupdir, build_type, pattern="*", dry_run=False):
     futures = []
     try:
@@ -587,6 +754,8 @@ def main():
     parser.add_argument("-b", "--build-type",
                         choices=["image-bootc", "containerfile", "container-encapsulate"],
                         help="Only build images of the specified type.")
+    parser.add_argument("--use-dag", action="store_true",
+                        help="Use DAG-based scheduling for parallel builds (default for layer processing).")
     dirgroup = parser.add_mutually_exclusive_group(required=False)
     dirgroup.add_argument("-l", "--layer-dir", type=str, help="Path to the layer directory to process.")
     dirgroup.add_argument("-g", "--group-dir", type=str, help="Path to the group directory to process.")
@@ -677,15 +846,27 @@ def main():
         opull_secret = os.path.join(BOOTC_IMAGE_DIR, "pull_secret.json", )
         common.update_pull_secret(PULL_SECRET, opull_secret, MIRROR_REGISTRY)
         PULL_SECRET = opull_secret
-        # Process layer directory contents sorted by length and then alphabetically
+        # Process builds
         if args.layer_dir:
-            for item in sorted(os.listdir(args.layer_dir), key=lambda i: (len(i), i)):
-                item_path = os.path.join(args.layer_dir, item)
-                # Check if this item is a directory
-                if os.path.isdir(item_path):
-                    process_group(item_path, args.build_type, dry_run=args.dry_run)
+            # Extract layer name from path
+            layer_name = os.path.basename(args.layer_dir)
+            base_dir = os.path.dirname(args.layer_dir)
+
+            # Use DAG-based scheduling for layer processing (default)
+            if args.use_dag or True:  # Always use DAG for layers
+                if not process_with_dag(base_dir, [layer_name], args.build_type, args.dry_run):
+                    raise Exception("DAG-based build failed")
+            else:
+                # Legacy group-based processing
+                for item in sorted(os.listdir(args.layer_dir), key=lambda i: (len(i), i)):
+                    item_path = os.path.join(args.layer_dir, item)
+                    if os.path.isdir(item_path):
+                        process_group(item_path, args.build_type, dry_run=args.dry_run)
+        elif args.group_dir:
+            # Process individual group directory (legacy mode)
+            process_group(dir2process, args.build_type, pattern, args.dry_run)
         else:
-            # Process individual group directory or template
+            # Process individual template
             process_group(dir2process, args.build_type, pattern, args.dry_run)
         # Toggle the success flag
         success_message = True

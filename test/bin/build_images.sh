@@ -748,14 +748,66 @@ if ${SKIP_ALL_BUILDS}; then
     exit 0
 fi
 
+# DAG-based scheduling for layer and full builds
+USE_DAG=${USE_DAG:-true}
+
 if [ -n "${LAYER}" ]; then
-    for group in "${LAYER}"/group*; do
-       do_group "${group}" ""
-    done
+    if ${USE_DAG}; then
+        # Extract layer name from path
+        layer_name=$(basename "${LAYER}")
+        blueprint_dir=$(dirname "${LAYER}")
+
+        dag_args=""
+        ${FORCE_REBUILD} && dag_args="${dag_args} --force"
+        ${ONLY_SOURCE} && dag_args="${dag_args} --only-source"
+        ${COMPOSER_DRY_RUN} && dag_args="${dag_args} --dry-run"
+
+        echo "Using DAG-based scheduling for layer ${layer_name}"
+        # shellcheck disable=SC2086
+        python3 "${SCRIPTDIR}/pyutils/dag_build_ostree.py" \
+            --blueprint-dir "${blueprint_dir}" \
+            --layers "${layer_name}" \
+            ${dag_args}
+    else
+        # Legacy group-based processing
+        for group in "${LAYER}"/group*; do
+           do_group "${group}" ""
+        done
+    fi
 elif [ -n "${GROUP}" ]; then
+    # Single group processing (legacy mode)
     do_group "${GROUP}" "${TEMPLATE}"
 else
-    for group in "${TESTDIR}"/image-blueprints/layer*/group*; do
-        do_group "${group}" ""
-    done
+    if ${USE_DAG}; then
+        # Build all layers using DAG scheduler
+        # Collect all layer names
+        layers=""
+        for layer_dir in "${TESTDIR}"/image-blueprints/layer*; do
+            if [ -d "${layer_dir}" ]; then
+                layer_name=$(basename "${layer_dir}")
+                if [ -z "${layers}" ]; then
+                    layers="${layer_name}"
+                else
+                    layers="${layers},${layer_name}"
+                fi
+            fi
+        done
+
+        dag_args=""
+        ${FORCE_REBUILD} && dag_args="${dag_args} --force"
+        ${ONLY_SOURCE} && dag_args="${dag_args} --only-source"
+        ${COMPOSER_DRY_RUN} && dag_args="${dag_args} --dry-run"
+
+        echo "Using DAG-based scheduling for layers: ${layers}"
+        # shellcheck disable=SC2086
+        python3 "${SCRIPTDIR}/pyutils/dag_build_ostree.py" \
+            --blueprint-dir "${TESTDIR}/image-blueprints" \
+            --layers "${layers}" \
+            ${dag_args}
+    else
+        # Legacy group-based processing
+        for group in "${TESTDIR}"/image-blueprints/layer*/group*; do
+            do_group "${group}" ""
+        done
+    fi
 fi
