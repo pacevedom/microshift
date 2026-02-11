@@ -77,24 +77,55 @@ fi
 # Tell scenario.sh to merge stderr into stdout
 export SCENARIO_MERGE_OUTPUT_STREAMS=true
 
-# Show the summary of the output of the parallel jobs.
-if [ -t 0 ]; then
-    progress="--progress"
-else
-    progress=""
-fi
+# VM Scheduler configuration
+# Set SCHEDULER_ENABLED=true to use the dynamic VM scheduler
+# The scheduler provides VM reuse and resource-aware queuing
+SCHEDULER_ENABLED="${SCHEDULER_ENABLED:-false}"
+export SCHEDULER_ENABLED
+
+# Host resource limits for the scheduler (defaults from system)
+_SYSTEM_VCPUS=$(nproc 2>/dev/null || echo 48)
+_SYSTEM_MEMORY_KB=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}' || echo 100663296)
+_SYSTEM_MEMORY_MB=$((_SYSTEM_MEMORY_KB / 1024))
+
+export HOST_TOTAL_VCPUS="${HOST_TOTAL_VCPUS:-${_SYSTEM_VCPUS}}"
+export HOST_TOTAL_MEMORY="${HOST_TOTAL_MEMORY:-${_SYSTEM_MEMORY_MB}}"
+
+# System reserved resources (for host OS, hypervisor overhead, etc.)
+export SYSTEM_RESERVED_VCPUS="${SYSTEM_RESERVED_VCPUS:-4}"
+export SYSTEM_RESERVED_MEMORY="${SYSTEM_RESERVED_MEMORY:-8192}"
 
 TEST_OK=true
-if ! parallel \
-    ${progress} \
-    --results "${SCENARIO_INFO_DIR}/{/.}/boot_and_run.log" \
-    --joblog "${BOOT_TEST_JOB_LOG}" \
-    --delay 5 \
-    bash -x ./bin/scenario.sh create-and-run ::: "${SCENARIOS_TO_RUN}"/*.sh ; then
-   TEST_OK=false
-fi
 
-cat "${BOOT_TEST_JOB_LOG}"
+if [ "${SCHEDULER_ENABLED}" = "true" ]; then
+    # Use the dynamic VM scheduler for resource-aware execution
+    echo "Using dynamic VM scheduler (total: vcpus=${HOST_TOTAL_VCPUS}, memory=${HOST_TOTAL_MEMORY}MB, reserved: vcpus=${SYSTEM_RESERVED_VCPUS}, memory=${SYSTEM_RESERVED_MEMORY}MB)"
+
+    if ! bash -x ./bin/vm_scheduler.sh orchestrate "${SCENARIOS_TO_RUN}"; then
+        TEST_OK=false
+    fi
+else
+    # Legacy mode: use GNU parallel without resource awareness
+    echo "Using GNU parallel for scenario execution (legacy mode)"
+
+    # Show the summary of the output of the parallel jobs.
+    if [ -t 0 ]; then
+        progress="--progress"
+    else
+        progress=""
+    fi
+
+    if ! parallel \
+        ${progress} \
+        --results "${SCENARIO_INFO_DIR}/{/.}/boot_and_run.log" \
+        --joblog "${BOOT_TEST_JOB_LOG}" \
+        --delay 5 \
+        bash -x ./bin/scenario.sh create-and-run ::: "${SCENARIOS_TO_RUN}"/*.sh ; then
+       TEST_OK=false
+    fi
+
+    cat "${BOOT_TEST_JOB_LOG}"
+fi
 
 echo "Boot and test phase complete"
 if ! "${TEST_OK}"; then

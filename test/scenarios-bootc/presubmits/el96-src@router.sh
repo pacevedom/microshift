@@ -2,6 +2,18 @@
 
 # Sourced from scenario.sh and uses functions defined there.
 
+# Opt-in to dynamic VM scheduling by declaring requirements
+dynamic_schedule_requirements() {
+    cat <<EOF
+min_vcpus=2
+min_memory=4096
+min_disksize=20
+networks=default
+boot_image=rhel96-bootc-source
+fips=false
+EOF
+}
+
 scenario_create_vms() {
     prepare_kickstart host1 kickstart-bootc.ks.template rhel96-bootc-source
     launch_vm --boot_blueprint rhel96-bootc
