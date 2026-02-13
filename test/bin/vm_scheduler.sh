@@ -24,6 +24,26 @@ SCENARIO_STATUS="${SCHEDULER_STATE_DIR}/scenarios"
 LOCK_DIR="${SCHEDULER_STATE_DIR}/locks"
 SCHEDULER_LOG="${SCHEDULER_STATE_DIR}/scheduler.log"
 
+# Track locks held by this process for cleanup on exit
+declare -a HELD_LOCKS=()
+
+# Cleanup function to release locks on exit/termination
+cleanup_locks() {
+    for lock_name in "${HELD_LOCKS[@]+"${HELD_LOCKS[@]}"}"; do
+        local lock_file="${LOCK_DIR}/${lock_name}.lock"
+        if [ -d "${lock_file}" ]; then
+            local lock_pid
+            lock_pid=$(cat "${lock_file}/pid" 2>/dev/null) || lock_pid=""
+            if [ "${lock_pid}" = "$$" ]; then
+                rm -rf "${lock_file}" 2>/dev/null || true
+            fi
+        fi
+    done
+}
+
+# Set up trap for cleanup on exit, interrupt, and termination
+trap cleanup_locks EXIT INT TERM
+
 # VM pool settings (from common.sh)
 VM_POOL_BASENAME="vm-storage"
 VM_DISK_BASEDIR="${IMAGEDIR}/${VM_POOL_BASENAME}"
@@ -196,11 +216,54 @@ calculate_max_dynamic_requirements() {
 }
 
 # Acquire a lock for thread-safe operations
+# Uses mkdir for atomic lock acquisition with timeout and stale lock detection
 acquire_lock() {
     local lock_name="$1"
     local lock_file="${LOCK_DIR}/${lock_name}.lock"
+    local lock_timeout="${LOCK_TIMEOUT:-300}"  # 5 minute default timeout
+    local stale_timeout=60  # Consider lock stale after 60 seconds
+    local start_time
+    start_time=$(date +%s)
 
-    while ! mkdir "${lock_file}" 2>/dev/null; do
+    while true; do
+        if mkdir "${lock_file}" 2>/dev/null; then
+            # Successfully acquired lock - record our PID and timestamp
+            echo "$$" > "${lock_file}/pid"
+            date +%s > "${lock_file}/timestamp"
+            # Track this lock for cleanup on exit
+            HELD_LOCKS+=("${lock_name}")
+            return 0
+        fi
+
+        # Check if lock is stale (holder crashed)
+        local lock_pid_file="${lock_file}/pid"
+        local lock_time_file="${lock_file}/timestamp"
+        if [ -f "${lock_pid_file}" ] && [ -f "${lock_time_file}" ]; then
+            local lock_pid lock_time current_time
+            lock_pid=$(cat "${lock_pid_file}" 2>/dev/null) || lock_pid=""
+            lock_time=$(cat "${lock_time_file}" 2>/dev/null) || lock_time=0
+            current_time=$(date +%s)
+
+            # Check if holding process is dead
+            if [ -n "${lock_pid}" ] && ! kill -0 "${lock_pid}" 2>/dev/null; then
+                log "Removing stale lock held by dead process ${lock_pid}"
+                rm -rf "${lock_file}"
+                continue
+            fi
+
+            # Check if lock is too old (process might be hung)
+            if [ $((current_time - lock_time)) -gt ${stale_timeout} ]; then
+                log "WARNING: Lock held for over ${stale_timeout}s by PID ${lock_pid}"
+            fi
+        fi
+
+        # Check timeout
+        local elapsed=$(($(date +%s) - start_time))
+        if [ "${elapsed}" -gt "${lock_timeout}" ]; then
+            log "ERROR: Failed to acquire lock '${lock_name}' after ${lock_timeout}s"
+            return 1
+        fi
+
         sleep 0.1
     done
 }
@@ -209,7 +272,18 @@ acquire_lock() {
 release_lock() {
     local lock_name="$1"
     local lock_file="${LOCK_DIR}/${lock_name}.lock"
-    rmdir "${lock_file}" 2>/dev/null || true
+
+    # Remove lock directory and contents
+    rm -rf "${lock_file}" 2>/dev/null || true
+
+    # Remove from held locks array
+    local -a new_held_locks=()
+    for held in "${HELD_LOCKS[@]+"${HELD_LOCKS[@]}"}"; do
+        if [ "${held}" != "${lock_name}" ]; then
+            new_held_locks+=("${held}")
+        fi
+    done
+    HELD_LOCKS=("${new_held_locks[@]+"${new_held_locks[@]}"}")
 }
 
 # Create VMs for all static scenarios (boot phase only)
@@ -347,6 +421,14 @@ get_req_value() {
     else
         echo "${value}"
     fi
+}
+
+# Escape special characters for use in sed replacement strings
+# This prevents injection attacks when scenario names contain special chars
+sed_escape() {
+    local input="$1"
+    # Escape: \ & / and newlines for sed replacement
+    printf '%s' "${input}" | sed -e 's/[\/&]/\\&/g' -e ':a;N;$!ba;s/\n/\\n/g'
 }
 
 # Check if boot image is compatible (superset matching)
@@ -541,8 +623,11 @@ assign_vm_to_scenario() {
     local vm_state="${vm_dir}/state"
 
     # Update status and current scenario
+    # Use sed_escape to prevent injection from scenario names with special chars
+    local escaped_scenario_name
+    escaped_scenario_name=$(sed_escape "${scenario_name}")
     sed -i "s/^status=.*/status=in_use/" "${vm_state}"
-    sed -i "s/^current_scenario=.*/current_scenario=${scenario_name}/" "${vm_state}"
+    sed -i "s/^current_scenario=.*/current_scenario=${escaped_scenario_name}/" "${vm_state}"
 
     # Record in scenario history
     echo "$(date -Iseconds) START ${scenario_name}" >> "${vm_dir}/scenario_history.log"
@@ -802,9 +887,8 @@ run_scenario_on_vm() {
     if [ -n "${next_scenario}" ]; then
         # Reuse VM for next compatible scenario
         local queue_file="${SCENARIO_QUEUE}/${next_scenario}"
-        local next_script next_reqs
+        local next_script
         next_script=$(get_req_value "${queue_file}" "script" "")
-        next_reqs=$(get_req_value "${queue_file}" "requirements" "")
 
         assign_vm_to_scenario "${vm_name}" "${next_scenario}"
 
@@ -901,14 +985,14 @@ dispatch_dynamic_scenarios() {
         if [ ${#pids[@]} -gt 0 ]; then
             # Wait for any background job to complete (bash 4.3+)
             # Returns immediately when any child exits
-            wait -n -p finished_pid 2>/dev/null || true
+            wait -n 2>/dev/null || true
 
             # Find which scenario finished and collect its exit status
             local -a new_pids=()
             local -a new_pid_scenarios=()
             for i in "${!pids[@]}"; do
-                local pid="${pids[$i]}"
-                local scenario="${pid_scenarios[$i]}"
+                local pid="${pids[${i}]}"
+                local scenario="${pid_scenarios[${i}]}"
                 if ! kill -0 "${pid}" 2>/dev/null; then
                     # Process finished - collect exit status
                     wait "${pid}" || overall_result=1
@@ -1116,7 +1200,7 @@ show_status() {
         local vm_state="${vm_dir}/state"
         if [ -f "${vm_state}" ]; then
             echo "${vm_name}:"
-            cat "${vm_state}" | sed 's/^/  /'
+            sed 's/^/  /' < "${vm_state}"
         fi
     done
     echo ""
@@ -1127,7 +1211,7 @@ show_status() {
         local scenario_name
         scenario_name=$(basename "${queue_file}")
         echo "${scenario_name}:"
-        cat "${queue_file}" | sed 's/^/  /'
+        sed 's/^/  /' < "${queue_file}"
     done
 }
 
