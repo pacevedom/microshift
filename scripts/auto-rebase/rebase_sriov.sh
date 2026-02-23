@@ -377,6 +377,19 @@ update_rebase_job_entrypoint_sh() {
 update_sriov_manifests() {
     title "Copying manifests"
     "${REPOROOT}/scripts/auto-rebase/handle_assets.py" "./scripts/auto-rebase/assets_sriov.yaml"
+
+    # Remove image env vars from operator.yaml - they will be added via kustomize patches per-arch
+    # Also set container image to a placeholder for kustomize images field to replace
+    local operator_yaml="${REPOROOT}/assets/optional/sriov/deploy/operator.yaml"
+    title "Preparing operator.yaml for per-arch image injection"
+
+    # Filter env array to exclude image env vars (they will be added via kustomize patches)
+    # and set placeholder container image for kustomize images field to replace
+    local image_env_regex="^(SRIOV_CNI_IMAGE|SRIOV_DEVICE_PLUGIN_IMAGE|NETWORK_RESOURCES_INJECTOR_IMAGE|SRIOV_NETWORK_CONFIG_DAEMON_IMAGE|SRIOV_NETWORK_WEBHOOK_IMAGE|SRIOV_INFINIBAND_CNI_IMAGE|RDMA_CNI_IMAGE|METRICS_EXPORTER_IMAGE|METRICS_EXPORTER_KUBE_RBAC_PROXY_IMAGE)$"
+    yq eval -i "
+        .spec.template.spec.containers[0].env = [.spec.template.spec.containers[0].env[] | select(.name | test(\"${image_env_regex}\") | not)] |
+        .spec.template.spec.containers[0].image = \"quay.io/openshift/sriov-network-operator:latest\"
+    " "${operator_yaml}"
 }
 
 update_sriov_images() {
@@ -459,7 +472,8 @@ write_sriov_images_for_arch() {
         resolved_images["${image_name}"]="${arch_image}"
     done
 
-    # Generate kustomization.{arch}.yaml with images and patches
+    # Generate kustomization.{arch}.yaml with images and JSON patches
+    # Image env vars are removed from operator.yaml and added here via patches (like OLM pattern)
     cat > "${kustomization_file}" <<EOF
 images:
   - name: quay.io/openshift/sriov-network-operator
@@ -516,6 +530,7 @@ patches:
     target:
       kind: Deployment
       name: sriov-network-operator
+      namespace: ${NAMESPACE}
 EOF
 }
 
