@@ -869,6 +869,13 @@ run_scenario_on_vm() {
 
     release_vm "${vm_name}" "${scenario_name}" "${result}"
 
+    # If tests failed, destroy the VM immediately instead of reusing
+    if [ "${result}" = "FAILED" ]; then
+        destroy_vm "${vm_name}" "test failure"
+        release_lock "vm_dispatch"
+        return ${exit_code}
+    fi
+
     # Check if any queued scenario can use this VM
     local next_scenario=""
     for queued in $(get_queued_scenarios); do
