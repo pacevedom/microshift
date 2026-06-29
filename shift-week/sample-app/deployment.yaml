@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-app
+  namespace: shift-week-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: demo-app
+  template:
+    metadata:
+      labels:
+        app: demo-app
+    spec:
+      serviceAccountName: demo-app
+      containers:
+        - name: notes-api
+          image: quay.io/pacevedo/shift-week-notes:latest
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: demo-app-config
+            - secretRef:
+                name: demo-app-secret
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: demo-app-data
