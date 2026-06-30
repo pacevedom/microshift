@@ -8,74 +8,60 @@ MicroShift → SNO is an "upward" transition: SNO is a superset of MicroShift in
 
 ## Tooling
 
-**[Crane](https://github.com/migtools/crane)** (Konveyor, CNCF Sandbox) — extracts live resource manifests, strips runtime metadata (`uid`, `resourceVersion`, `creationTimestamp`, `managedFields`), produces clean redeployable YAML. Namespace-scoped only. Does NOT migrate PVC data or cluster-scoped resources.
+**[Velero](https://velero.io/)** is the migration tool. It backs up and restores Kubernetes resources (namespaced and cluster-scoped) AND persistent volume data via Kopia file-level copy. It handles everything needed for a one-off migration: Deployments, Services, Routes, CRDs, ClusterRoles, PVCs, and the data inside the volumes.
 
-**[Velero](https://velero.io/)** — backs up and restores Kubernetes resources AND persistent volume data via CSI snapshots or file-level copy (Kopia). Captures everything including cluster-scoped resources. Requires S3-compatible object storage.
+| What Velero migrates | How |
+|---|---|
+| Namespaced resources (Deployments, Services, Routes, etc.) | Backup + restore |
+| Cluster-scoped resources (CRDs, ClusterRoles, Namespaces) | Backup + restore |
+| PVC data | Kopia file-level copy via S3 |
 
-| Concern | Crane | Velero |
-|---|---|---|
-| Namespaced resource manifests | Exports + cleans metadata | Backs up + restores (keeps runtime metadata) |
-| Cluster-scoped resources (CRDs, ClusterRoles) | Not supported | Supported |
-| PVC data | Not supported | CSI snapshots or Kopia file-level copy |
-| Clean YAML for GitOps | Yes — main value | No — restores with runtime cruft |
+### Why not Crane?
 
-### Why both tools? Neither alone is sufficient.
+[Crane](https://github.com/migtools/crane) (Konveyor, CNCF Sandbox) was evaluated as part of this experiment. It extracts namespaced resource manifests and strips runtime metadata (`uid`, `resourceVersion`, `creationTimestamp`), producing clean redeployable YAML. However, it proved **insufficient as a migration tool** for several reasons:
 
-**Velero alone** backs up everything (manifests, cluster-scoped resources, PVC data), but restores raw runtime state — including pods with injected init containers (`restore-wait`), stale node assignments, and old Route hostnames. In this experiment, a pure Velero restore produced pods that never started the application and Routes that returned 404.
+1. **Cannot migrate PVC data** — exports PVC manifests but not the data inside the volumes.
+2. **Cannot export cluster-scoped resources** — CRDs, ClusterRoles, ClusterRoleBindings, and Namespaces are invisible to Crane.
+3. **Incompatible with Velero's FSB restore** — Velero's Kopia file-level data restore is tied to specific pod names from the backup. Crane-created Deployments spawn pods with different ReplicaSet hashes and names, causing Velero's FSB restore to hang indefinitely waiting for pods that will never appear.
+4. **Cannot run before Velero** — due to point 3, Crane manifests must be applied after the full Velero restore. At that point, all resources already exist on the target cluster, making Crane's output redundant for the migration itself.
 
-**Crane alone** produces clean, adjustable manifests that deploy correctly on the target, but cannot migrate PVC data or cluster-scoped resources (CRDs, ClusterRoles, ClusterRoleBindings).
+**Crane remains useful for**: extracting clean YAML for GitOps onboarding or version control, independently of the migration process. It is not part of the migration playbook.
 
-**Crane + Velero together**: Crane handles manifest quality (clean, adjustable YAML). Velero handles completeness (cluster-scoped resources, PVC data, anything Crane missed). With `--existing-resource-policy update`, Velero backfills what Crane can't export without overwriting what Crane already created cleanly.
+### Restore process
 
-### Restore ordering is critical
-
-The sequence on the target cluster must be:
+The correct sequence on the target cluster:
 
 ```
-1. Velero restore — cluster-scoped resources only (CRDs, ClusterRoles)
-   Safe because these are just definitions — no runtime state, no init containers.
-   Must exist before step 2, as CR instances depend on their CRDs.
+1. Velero full restore — creates everything (Namespaces, CRDs, ClusterRoles,
+   Deployments, Services, Routes, PVCs, pods) and restores PVC data via
+   Kopia FSB. The pods must match the backup names for FSB to work.
 
-2. Crane apply — clean namespaced manifests
-   Creates Deployments, Services, Routes, etc. with correct specs.
-   The Deployment controller creates clean pods without Velero artifacts.
+2. Delete pods — removes Velero's restored pods, which carry injected
+   restore-wait init containers and stale runtime state. The Deployment
+   controller recreates them cleanly with the restored data on the PVC.
 
-3. Velero full restore (--existing-resource-policy update)
-   Restores PVC data via Kopia FSB (triggered by the Pod resource in the backup).
-   Skips resources Crane already created (update policy).
-   Backfills anything Crane missed (auto-generated ConfigMaps, EndpointSlices, etc.).
-
-4. Delete pods — so they restart clean with restored data
-   The Deployment recreates pods from the clean spec (step 2),
-   and they mount the PVC with restored data (step 3).
+3. Post-migration adjustments — fix Route hostnames, StorageClass names,
+   or other target-specific values via oc patch / oc edit.
 ```
 
-**If Velero runs before Crane** (steps 2 and 3 reversed), Velero recreates raw pods from the backup with injected `restore-wait` init containers and stale runtime state. The Deployment sees a matching spec and does not trigger a new rollout, leaving broken pods running. This was observed during the experiment and caused the app to return 404 until the pods were manually deleted.
+Approaches that failed during the experiment:
+- **Crane before Velero**: FSB restore hangs — pod names don't match the backup.
+- **Crane between Velero phases**: same problem — Velero can't find the Crane-created pods.
+- **Velero with `--include-resources` filtering**: restricting to PVCs/PVs restores manifests but skips the FSB data, because the data restore is triggered by the Pod resource.
 
 ## MicroShift → SNO: what to know
 
 **Transfers cleanly**: SCCs (identical on both — verified in source), NetworkPolicies, Routes (same OVN-K), namespaced RBAC, API compatibility (SNO has all MicroShift APIs and more).
 
 **Requires adjustment**:
-- **StorageClass**: MicroShift uses `topolvm-provisioner` (LVMS). Install LVMS on SNO via OLM, or change the StorageClass in PVC manifests.
-- **Route hostnames**: exported Routes carry the MicroShift domain. Remove `spec.host` to let SNO auto-assign, or update manually.
-- **CRDs/Operators**: install via OperatorHub on SNO before applying CR instances.
-- **Image pull secrets**: node-level pull secret location differs (`/etc/crio/openshift-pull-secret` vs `openshift-config`). Namespace-scoped secrets transfer fine.
-- **Host-level deps**: hostPath mounts, firewall rules, SELinux labels, kernel modules — invisible to both tools.
+- **Pod CIDR mismatch**: MicroShift uses `10.42.0.0/16`, SNO typically uses `10.128.0.0/14`. Velero restores pods with OVN-K annotations containing the source cluster's IP addresses. OVN-K on the target rejects these IPs and the pod can't start, which also blocks the FSB data restore. **Fix**: use a Velero resource modifier to strip `k8s.ovn.org/pod-networks` annotations during restore (see Step 4).
+- **StorageClass**: MicroShift uses `topolvm-provisioner` (LVMS). SNO's LVMS creates `lvms-vg1`. Create a `topolvm-provisioner` StorageClass alias on SNO, or install LVMS with matching names (see Step 3).
+- **Route hostnames**: restored Routes carry the MicroShift domain. Patch with `oc patch route <name> -n <ns> --type=json -p '[{"op":"remove","path":"/spec/host"}]'` to let SNO auto-assign.
+- **CRDs/Operators**: if CRDs come from an operator, install the operator via OperatorHub on SNO. Velero restores the CRD definition but not the operator that manages it.
+- **Image pull secrets**: node-level pull secret location differs (`/etc/crio/openshift-pull-secret` vs `openshift-config`). Namespace-scoped secrets transfer fine via Velero.
+- **Host-level deps**: hostPath mounts, firewall rules, SELinux labels, kernel modules — invisible to Velero.
 
-## Tool Installation
-
-### Crane
-
-```bash
-git clone https://github.com/migtools/crane.git /tmp/crane
-cd /tmp/crane && go build -o crane main.go && sudo mv crane /usr/local/bin/
-crane --help
-```
-
-Latest release: v0.10.0-alpha.1 (alpha quality).
-
-### Velero
+## Velero Installation
 
 **CLI**:
 ```bash
@@ -171,20 +157,23 @@ For MinIO or non-AWS S3, add `s3ForcePathStyle=true,s3Url=<endpoint>` to `--back
 
 ## Sample Application
 
-Minimal notes API in `shift-week/sample-app/` exercising all migration-relevant resource types. Python HTTP server, no custom image build required beyond `python:3-alpine`.
+Minimal notes API in `shift-week/sample-app/` exercising all migration-relevant resource types. Python HTTP server that reads a NoteConfig CRD from the Kubernetes API to enforce `maxNotes` limits and `retentionDays` expiry on stored notes.
 
-| Resource | File |
-|---|---|
-| Namespace | `namespace.yaml` |
-| ConfigMap | `configmap.yaml` |
-| Secret | `secret.yaml` |
-| PVC (LVMS) | `pvc.yaml` |
-| ServiceAccount | `serviceaccount.yaml` |
-| Role + RoleBinding | `rbac.yaml` |
-| Deployment | `deployment.yaml` |
-| Service | `service.yaml` |
-| Route (edge TLS) | `route.yaml` |
-| NetworkPolicy | `networkpolicy.yaml` |
+| Resource | File | Scope |
+|---|---|---|
+| Namespace | `namespace.yaml` | Cluster |
+| CRD (`NoteConfig`) | `crd.yaml` | Cluster |
+| ClusterRole + ClusterRoleBinding | `clusterrbac.yaml` | Cluster |
+| ConfigMap | `configmap.yaml` | Namespace |
+| Secret | `secret.yaml` | Namespace |
+| PVC (LVMS) | `pvc.yaml` | Namespace |
+| ServiceAccount | `serviceaccount.yaml` | Namespace |
+| Role + RoleBinding | `rbac.yaml` | Namespace |
+| NoteConfig CR | `noteconfig.yaml` | Namespace |
+| Deployment | `deployment.yaml` | Namespace |
+| Service | `service.yaml` | Namespace |
+| Route (edge TLS) | `route.yaml` | Namespace |
+| NetworkPolicy | `networkpolicy.yaml` | Namespace |
 
 ```bash
 cd shift-week/sample-app
@@ -210,94 +199,188 @@ curl -sk --connect-to "$ROUTE:443:$NODE_IP:443" -X POST -d "note before migratio
 curl -sk --connect-to "$ROUTE:443:$NODE_IP:443" https://$ROUTE | python3 -m json.tool | tee before-migration.json
 ```
 
-### Step 2: Export manifests with Crane
+### Step 2: Back up with Velero
 
-```bash
-mkdir -p ~/shift-week-migration && cd ~/shift-week-migration
-crane export -n shift-week-demo
-crane transform
-crane apply
-```
-
-Review `output/output.yaml` — verify all resources are present and runtime metadata is stripped.
-
-### Step 3: Back up PVC data with Velero
-
-Install Velero on MicroShift (see [Tool Installation](#tool-installation)), then:
+Install Velero on MicroShift (see [Velero Installation](#velero-installation)), then back up the namespace. Velero captures everything: namespaced resources, cluster-scoped resources (NoteConfig CRD, ClusterRole), and PVC data via Kopia.
 
 ```bash
 velero backup create shift-week-backup --include-namespaces shift-week-demo --wait
 velero backup describe shift-week-backup --details
 ```
 
-Kopia can only back up volumes mounted by a running pod — keep the app running during backup.
+Verify the resource list includes:
+- `customresourcedefinitions` — the NoteConfig CRD
+- `clusterroles` / `clusterrolebindings` — demo-app-cluster-role
+- `noteconfigs` — the CR instance
+- PVC data under "Pod Volume Backups"
 
-### Step 4: Prepare SNO
+Keep the app running during backup — Kopia can only back up volumes mounted by a running pod.
+
+### Step 3: Prepare SNO
 
 ```bash
 export KUBECONFIG=<path-to-sno-kubeconfig>
+```
 
-# Check storage — install LVMS via OperatorHub if needed, or note the available StorageClass
+**Install LVMS** so the `topolvm-provisioner` StorageClass matches MicroShift. Without this, Velero restores the PVC with a StorageClass that doesn't exist on SNO and it stays `Pending`.
+
+```bash
+# Create the namespace and OperatorGroup (required by OLM before any operator installs)
+oc create namespace openshift-storage
+
+oc apply -f - <<EOF
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: openshift-storage-operatorgroup
+  namespace: openshift-storage
+spec:
+  targetNamespaces:
+  - openshift-storage
+EOF
+
+# Find the correct channel — it's versioned (stable-4.XX), not just "stable"
+OCP_MINOR=$(oc get clusterversion version -o jsonpath='{.status.desired.version}' | grep -oP '^\d+\.\d+')
+echo "Using channel: stable-${OCP_MINOR}"
+
+# Install the LVMS operator
+oc apply -f - <<EOF
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: lvms-operator
+  namespace: openshift-storage
+spec:
+  channel: stable-${OCP_MINOR}
+  name: lvms-operator
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+EOF
+
+# Wait for the operator pod
+sleep 15
+oc wait --for=condition=ready pod -l app.kubernetes.io/name=lvms-operator -n openshift-storage --timeout=120s
+
+# Create the LVMCluster — this provisions the volume group and StorageClass
+oc apply -f - <<EOF
+apiVersion: lvm.topolvm.io/v1alpha1
+kind: LVMCluster
+metadata:
+  name: lvmcluster
+  namespace: openshift-storage
+spec:
+  storage:
+    deviceClasses:
+      - name: vg1
+        thinPoolConfig:
+          name: thin-pool-1
+          sizePercent: 90
+          overprovisionRatio: 10
+EOF
+
+# Verify the StorageClass exists
 oc get storageclass
+```
 
-# Verify image pull works
+SNO's LVMS typically creates `lvms-vg1` instead of MicroShift's `topolvm-provisioner`. Create a StorageClass alias so Velero-restored PVCs bind without patching:
+
+```bash
+oc apply -f - <<EOF
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: topolvm-provisioner
+provisioner: topolvm.io
+parameters:
+  csi.storage.k8s.io/fstype: xfs
+  topolvm.io/device-class: vg1
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+EOF
+
+# Verify both StorageClasses exist
+oc get storageclass | grep topolvm
+```
+
+**Verify image pull**:
+```bash
 oc run test-pull --image=quay.io/pacevedo/shift-week-notes:latest --restart=Never -n default
 oc delete pod test-pull -n default
 ```
 
-### Step 5: Adjust manifests for SNO
+### Step 4: Restore on SNO
+
+Install Velero on SNO pointing to the same S3 bucket (see [Velero Installation](#velero-installation)).
+
+MicroShift and SNO use different pod CIDRs (`10.42.0.0/16` vs `10.128.0.0/14`). Velero restores pods with OVN-K annotations containing the source cluster's IP addresses, which OVN-K on SNO rejects — the pod can't start and the FSB data restore deadlocks. The fix is a Velero [resource modifier](https://velero.io/docs/main/restore-resource-modifiers/) that strips the network annotations during restore:
 
 ```bash
-cp output/output.yaml output/output-sno.yaml
-```
+# Create resource modifier to strip OVN-K annotations from pods
+cat > /tmp/resource-modifiers.yaml <<'EOF'
+version: v1
+resourceModifierRules:
+- conditions:
+    groupResource: pods
+  mergePatches:
+  - patchData: |
+      {
+        "metadata": {
+          "annotations": {
+            "k8s.ovn.org/pod-networks": null
+          }
+        }
+      }
+EOF
 
-Edit `output/output-sno.yaml`:
-- **StorageClass**: change `topolvm-provisioner` if SNO uses a different one
-- **Route hostname**: remove `spec.host` to let SNO auto-assign
+kubectl create cm strip-network-annotations \
+  --from-file=/tmp/resource-modifiers.yaml -n velero
 
-### Step 6: Apply on SNO
-
-Install Velero on SNO pointing to the same S3 bucket (see [Tool Installation](#tool-installation)). Then follow the three-phase restore sequence (see [Restore ordering is critical](#restore-ordering-is-critical) for why this order matters):
-
-```bash
-# Phase 1: Restore cluster-scoped resources from Velero
-# (CRDs, ClusterRoles — must exist before CR instances can be applied)
-# For our sample app this is a no-op, but for apps with custom CRDs:
-velero restore create shift-week-cluster-scoped \
-  --from-backup shift-week-backup \
-  --include-resources customresourcedefinitions,clusterroles,clusterrolebindings \
-  --existing-resource-policy update \
-  --wait
-
-# Phase 2: Apply cleaned namespaced manifests from Crane
-oc apply -f output/output-sno.yaml
-
-# Phase 3: Full Velero restore for PVC data and anything Crane missed
-# Do NOT use --include-resources here — FSB data restore is triggered by
-# restoring the Pod resource. Filtering to only PVCs/PVs skips the data.
+# Full Velero restore with the resource modifier
 velero restore create shift-week-restore \
   --from-backup shift-week-backup \
-  --existing-resource-policy update \
+  --resource-modifier-configmap strip-network-annotations \
   --wait
 
-# Verify the restore includes Pod Volume Restores
+# Verify the restore completed and includes Pod Volume Restores
 velero restore describe shift-week-restore --details
 
-# Restart pods so they pick up restored data with clean specs
+# Delete pods — removes Velero's stale pods (with injected
+# restore-wait init containers). The Deployment recreates them cleanly.
 oc delete pod -l app=demo-app -n shift-week-demo
 oc wait --for=condition=ready pod -l app=demo-app -n shift-week-demo --timeout=120s
 ```
 
-### Step 7: Validate
+### Step 5: Post-migration adjustments
+
+Fix target-specific values that don't match the source cluster:
+
+```bash
+# Fix Route hostname — remove the old host to let SNO auto-assign
+oc patch route demo-app -n shift-week-demo --type=json \
+  -p '[{"op":"remove","path":"/spec/host"}]'
+
+# If StorageClass differs, the PVC was already restored and bound by Velero.
+# For future PVCs, update the default StorageClass on SNO.
+
+# Verify the Route got a new hostname
+oc get route demo-app -n shift-week-demo -o jsonpath='{.spec.host}'; echo
+```
+
+### Step 6: Validate
 
 ```bash
 ROUTE=$(oc get route demo-app -n shift-week-demo -o jsonpath='{.spec.host}')
 NODE_IP=<sno-node-ip>
 
-# Check resources
-oc get deploy,svc,route,pvc,cm,secret,networkpolicy -n shift-week-demo
+# Check all resources are present
+oc get deploy,svc,route,pvc,cm,secret,networkpolicy,noteconfigs -n shift-week-demo
 
-# Test the app
+# Check cluster-scoped resources
+oc get crd noteconfigs.shift-week.example.com
+oc get clusterrole demo-app-cluster-role
+
+# Test the app — notes should be present from before migration
 curl -sk --connect-to "$ROUTE:443:$NODE_IP:443" https://$ROUTE | python3 -m json.tool | tee after-migration.json
 
 # Post a new note to verify full functionality
@@ -306,46 +389,68 @@ curl -sk --connect-to "$ROUTE:443:$NODE_IP:443" -X POST -d "first note on SNO" h
 
 ### Expected results
 
-| Aspect | Crane only | Crane + Velero |
-|---|---|---|
-| App config (title, message, token) | Identical | Identical |
-| Notes | Empty (data not migrated) | Present (data restored) |
-| Route | Working, different hostname | Working, different hostname |
-| NetworkPolicy | Working | Working |
-| RBAC / SCCs | Working | Working |
+| Aspect | Expected |
+|---|---|
+| App config (title, message, token) | Identical — from ConfigMap and Secret |
+| Notes | Present — PVC data restored, with createdAt/expiresAt timestamps |
+| NoteConfig CR | Present — maxNotes and retentionDays enforced |
+| Route | Working, new hostname after patching |
+| NetworkPolicy | Working |
+| RBAC / SCCs | Working — both namespaced and cluster-scoped |
+| CRD | Present — NoteConfig CRD restored by Velero |
 
 ## Assessment
 
 ### Key finding
 
-Neither Crane nor Velero alone is sufficient for a clean MicroShift → SNO migration. Both are needed, and the order they run in is critical:
+**Velero is sufficient for a one-off MicroShift → SNO migration.** It handles everything: namespaced resources, cluster-scoped resources (CRDs, ClusterRoles), and PVC data. The migration process is: full Velero backup on source, full Velero restore on target, delete pods to clean up stale runtime state, patch Route hostnames.
 
-- **Crane** provides manifest quality — clean, adjustable YAML without runtime metadata. This is what makes the manifests work on the target cluster (correct pod specs, adjustable StorageClass and Route hostnames).
-- **Velero** provides completeness — cluster-scoped resources (CRDs, ClusterRoles), PVC data, and auto-generated resources that Crane can't export.
-- **Ordering** — Crane manifests must be applied before the full Velero restore. Reversing this produces broken pods with stale runtime state from the source cluster.
+**Crane is not needed for migration.** It was evaluated during this experiment and found to be incompatible with Velero's FSB data restore due to pod name mismatches. Crane produces clean YAML suitable for GitOps onboarding, but this is a separate concern from migration. For post-migration manifest adjustments, `oc patch` and `oc edit` are simpler and sufficient.
 
-### What each tool covers
+### What Velero covers
 
-| Layer | Crane | Velero | Manual |
-|---|---|---|---|
-| Namespaced resources (Deployments, Services, Routes, etc.) | Clean export | Backup + restore (with runtime cruft) | |
-| Cluster-scoped resources (CRDs, ClusterRoles) | | Backup + restore | Operators via OperatorHub |
-| PVC data | | Kopia FSB or CSI snapshots | |
-| Manifest adjustments (StorageClass, Route hostname) | Editable output | | Review + edit |
-| Host-level deps (firewall, SELinux, mounts) | | | Fully manual |
+| Layer | Velero | Manual |
+|---|---|---|
+| Namespaced resources (Deployments, Services, Routes, etc.) | Backup + restore | |
+| Cluster-scoped resources (CRDs, ClusterRoles, Namespaces) | Backup + restore | Operators via OperatorHub |
+| PVC data | Kopia FSB | |
+| Route hostnames | | `oc patch` after restore |
+| Pod CIDR mismatch | Resource modifier strips OVN annotations | |
+| StorageClass differences | | StorageClass alias or LVMS on target |
+| Host-level deps (firewall, SELinux, mounts) | | Fully manual |
 
-### Lessons learned from the experiment
+### Lessons learned
 
-1. **Velero on MicroShift requires extra configuration**: fully qualified image names (`docker.io/...`), `privilegedFsBackup: true` in a ConfigMap referenced at install time, and privileged SCC grants. None of this is documented for MicroShift specifically.
-2. **Velero's `--include-resources` breaks FSB data restores**: filtering to only PVCs/PVs restores the manifests but skips the Kopia file-level data, because FSB restore is triggered by restoring the Pod resource.
-3. **Restore ordering matters**: Velero before Crane produces pods with injected `restore-wait` init containers that don't start the application. Crane before Velero produces clean pods that work correctly.
-4. **SCCs are identical**: MicroShift ships the full set of OpenShift SCCs. This is not a migration concern.
-5. **The MicroShift → SNO direction is favorable**: SNO is a superset of MicroShift in API surface. No missing APIs, no missing SCCs, no missing NetworkPolicy support. The main practical traps are StorageClass mismatches and missing operators/CRDs on the target.
+1. **Velero alone is sufficient**: it handles namespaced resources, cluster-scoped resources, and PVC data. Crane adds no value to the migration workflow itself.
+2. **Pod CIDR mismatch blocks FSB restore**: MicroShift uses `10.42.0.0/16`, SNO uses `10.128.0.0/14`. Velero restores pods with OVN-K annotations containing the source IP. OVN-K on the target rejects it, the pod can't start, and the FSB data restore deadlocks. **Fix**: use `--resource-modifier-configmap` to strip `k8s.ovn.org/pod-networks` annotations during restore.
+3. **StorageClass names differ**: MicroShift's LVMS creates `topolvm-provisioner`, SNO's creates `lvms-vg1`. Velero-restored PVCs reference the source StorageClass. **Fix**: create a `topolvm-provisioner` StorageClass alias on SNO before the restore.
+4. **Crane is incompatible with Velero FSB**: Crane-created Deployments spawn pods with different names than the backup. Velero's FSB data restore depends on matching pod names and hangs indefinitely if they don't match.
+5. **Delete pods after Velero restore**: Velero-restored pods carry injected `restore-wait` init containers. Deleting them lets the Deployment recreate clean pods with the restored data already on the PVC.
+6. **Never use `--include-resources` for FSB restores**: filtering to PVCs/PVs restores manifests but skips the Kopia file-level data, because the data restore is triggered by the Pod resource.
+7. **Velero on MicroShift requires extra configuration**: fully qualified image names (`docker.io/...`), `privilegedFsBackup: true` in a ConfigMap referenced at install time via `--node-agent-configmap`, and privileged SCC grants. None of this is documented for MicroShift specifically.
+8. **Stuck restores block new ones**: if a Velero restore gets stuck `InProgress (Deleting)`, it blocks subsequent restores. Fix by removing finalizers with `oc patch restore <name> -n velero --type=merge -p '{"metadata":{"finalizers":null}}'` and restarting the Velero pod.
+9. **SCCs are identical**: MicroShift ships the full set of OpenShift SCCs. This is not a migration concern.
+10. **The MicroShift → SNO direction is favorable**: SNO is a superset of MicroShift in API surface. The main practical traps are pod CIDR mismatch, StorageClass names, and Route hostnames — all solvable with pre-restore configuration.
+
+## Appendix: Crane for GitOps
+
+If the goal is to extract clean manifests for version control (separately from the migration), Crane can be used independently:
+
+```bash
+crane export -n shift-week-demo
+crane transform
+crane apply
+# Clean YAML in output/output.yaml — no runtime metadata, suitable for Git
+```
+
+Crane only exports namespaced resources. CRDs, ClusterRoles, and Namespaces must be exported manually with `oc get <resource> -o yaml`.
 
 ## References
 
-- [Crane — GitHub](https://github.com/migtools/crane)
+- [Velero — Restore Resource Modifiers](https://velero.io/docs/main/restore-resource-modifiers/)
 - [Velero — File System Backup](https://velero.io/docs/v1.15/file-system-backup/)
+- [Velero — Node Agent ConfigMap](https://velero.io/docs/main/supported-configmaps/node-agent-configmap/)
 - [Velero — AWS Plugin](https://github.com/vmware-tanzu/velero-plugin-for-aws)
-- [Crane — Red Hat Cloud Experts](https://cloud.redhat.com/experts/redhat/crane/)
 - [OpenShift Velero Plugin](https://github.com/openshift/openshift-velero-plugin)
+- [Crane — GitHub](https://github.com/migtools/crane)
+- [Crane — Red Hat Cloud Experts](https://cloud.redhat.com/experts/redhat/crane/)
