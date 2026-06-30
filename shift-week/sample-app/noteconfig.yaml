@@ -1,0 +1,8 @@
+apiVersion: shift-week.example.com/v1
+kind: NoteConfig
+metadata:
+  name: default
+  namespace: shift-week-demo
+spec:
+  maxNotes: 10
+  retentionDays: 7

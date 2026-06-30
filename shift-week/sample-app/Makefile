@@ -12,6 +12,8 @@ push: build
 	podman push $(IMAGE)
 
 deploy:
+	oc apply -f $(MANIFESTS_DIR)/crd.yaml
+	oc wait --for=condition=established crd/noteconfigs.shift-week.example.com --timeout=30s
 	oc apply -f $(MANIFESTS_DIR)
 	oc wait --for=condition=ready pod -l app=demo-app -n $(NAMESPACE) --timeout=120s
 	@echo ""
@@ -19,6 +21,8 @@ deploy:
 
 undeploy:
 	oc delete -f $(MANIFESTS_DIR) --ignore-not-found
+	oc delete -f $(MANIFESTS_DIR)/crd.yaml --ignore-not-found
+	oc delete -f $(MANIFESTS_DIR)/clusterrbac.yaml --ignore-not-found
 
 test:
 	@ROUTE=$$(oc get route demo-app -n $(NAMESPACE) -o jsonpath='{.spec.host}'); \

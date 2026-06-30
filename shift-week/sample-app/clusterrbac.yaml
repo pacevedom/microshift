@@ -1,26 +1,21 @@
 apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
+kind: ClusterRole
 metadata:
-  name: demo-app-role
-  namespace: shift-week-demo
+  name: demo-app-cluster-role
 rules:
-  - apiGroups: [""]
-    resources: ["configmaps"]
-    verbs: ["get", "list"]
   - apiGroups: ["shift-week.example.com"]
     resources: ["noteconfigs"]
     verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
+kind: ClusterRoleBinding
 metadata:
-  name: demo-app-rolebinding
-  namespace: shift-week-demo
+  name: demo-app-cluster-rolebinding
 subjects:
   - kind: ServiceAccount
     name: demo-app
     namespace: shift-week-demo
 roleRef:
-  kind: Role
-  name: demo-app-role
+  kind: ClusterRole
+  name: demo-app-cluster-role
   apiGroup: rbac.authorization.k8s.io
