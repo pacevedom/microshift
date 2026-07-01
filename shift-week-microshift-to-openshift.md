@@ -4,11 +4,54 @@
 
 Evaluate the feasibility of migrating a user application from MicroShift to Single Node OpenShift (SNO), document what transfers cleanly, what requires manual intervention, and what gaps exist.
 
-MicroShift → SNO is an "upward" transition: SNO is a superset of MicroShift in API surface and platform capabilities.
+## Why migrate applications, not the platform?
+
+MicroShift and SNO cannot be converted into each other. They are fundamentally different platform topologies built on different operating system foundations:
+
+- **MicroShift** runs as an RPM on RHEL or RHEL for Edge. The Kubernetes control plane is a single binary embedded in the OS. There are no operators managing the cluster — components like OVN-K, LVMS, and CoreDNS are built-in and configured via `/etc/microshift/config.yaml`. The OS is managed by rpm-ostree or image-based updates.
+- **SNO** is a full OpenShift installation on RHCOS (Red Hat CoreOS). The control plane runs as pods managed by a set of cluster operators (CVO, MCO, etc.). Every infrastructure component — networking, storage, ingress, monitoring — is an operator that reconciles its own state. The OS is managed by the Machine Config Operator.
+
+There is no upgrade path from one to the other. You cannot install OpenShift operators on top of MicroShift's embedded components, and you cannot strip SNO down to MicroShift's topology. The operating system, the control plane architecture, and the lifecycle management model are all different.
+
+This means when a workload outgrows MicroShift (needs more operators, more observability, multi-tenancy, or simply needs to move from edge to datacenter), the **application** must be migrated — extracted from one platform and deployed on the other. The platform stays behind.
+
+MicroShift → SNO is an "upward" transition: SNO is a superset of MicroShift in API surface and platform capabilities. Everything the application uses on MicroShift exists on SNO, making this direction favorable.
+
+## What kind of application are we migrating?
+
+Not all applications require the same migration effort. The complexity depends on three dimensions:
+
+**State**: does the application store data that must survive the migration?
+
+| Type | Example | Migration impact |
+|---|---|---|
+| Stateless | Web frontend, API gateway | Redeploy from source (Helm, GitOps, pipeline). No data to migrate. |
+| Stateful (reconstructable) | App with DB that can be seeded, cache that rebuilds | Redeploy + let the app reconstruct its state. |
+| Stateful (persistent) | App with PVCs holding user data, logs, uploads | Must migrate both manifests and PVC data. This is the hard case. |
+
+**Complexity**: how many Kubernetes resource types does the application touch?
+
+| Level | Resources involved | Migration impact |
+|---|---|---|
+| Simple | Deployment, Service, ConfigMap, Secret | Velero handles it with minimal adjustments. |
+| Medium | Above + PVCs, Routes, NetworkPolicies, RBAC | Velero handles it, but StorageClass and Route hostname need fixing. |
+| Complex | Above + CRDs, CRs, ClusterRoles, multi-namespace | Velero handles it, but operators that manage CRDs must be installed on the target first. |
+
+**Packaging**: how is the application deployed today?
+
+| Packaging | Migration approach |
+|---|---|
+| Raw manifests (no tooling) | Velero for everything — the only option that works without prior packaging. This is what the experiment demonstrates. |
+| Helm chart | `helm install` with target-specific values for manifests + Velero only for PVC data. Avoids most Velero gotchas. |
+| GitOps (ArgoCD/Flux) | Sync from Git repo to target cluster + Velero for PVC data. Manifests are already environment-aware. |
+| Operator-managed | Install operator on target + apply CR. Some operators handle data migration internally. |
+
+The experiment's sample application is designed to touch every resource type category while remaining small enough to demo: **stateful, complex, raw manifests**. It has a PVC with persistent data, a custom CRD with a CR instance, cluster-scoped RBAC, and no packaging. A real production application would have more CRDs, more cross-namespace dependencies, operator-managed resources, and larger datasets — but the migration challenges (StorageClass mismatches, pod CIDR conflicts, CRD ordering, stale runtime state) are the same regardless of scale.
 
 ## Tooling
 
-**[Velero](https://velero.io/)** is the migration tool. It backs up and restores Kubernetes resources (namespaced and cluster-scoped) AND persistent volume data via Kopia file-level copy. It handles everything needed for a one-off migration: Deployments, Services, Routes, CRDs, ClusterRoles, PVCs, and the data inside the volumes.
+### Velero
+**[Velero](https://velero.io/)** is one famous migration tool. It backs up and restores Kubernetes resources (namespaced and cluster-scoped) AND persistent volume data via Kopia file-level copy. It handles everything needed for a one-off migration: Deployments, Services, Routes, CRDs, ClusterRoles, PVCs, and the data inside the volumes.
 
 | What Velero migrates | How |
 |---|---|
@@ -16,13 +59,13 @@ MicroShift → SNO is an "upward" transition: SNO is a superset of MicroShift in
 | Cluster-scoped resources (CRDs, ClusterRoles, Namespaces) | Backup + restore |
 | PVC data | Kopia file-level copy via S3 |
 
-### Why not Crane?
+### Crane
 
-[Crane](https://github.com/migtools/crane) (Konveyor, CNCF Sandbox) was evaluated as part of this experiment. It extracts namespaced resource manifests and strips runtime metadata (`uid`, `resourceVersion`, `creationTimestamp`), producing clean redeployable YAML. However, it proved **insufficient as a migration tool** for several reasons:
+[Crane](https://github.com/migtools/crane) (Konveyor, CNCF Sandbox) extracts namespaced resource manifests and strips runtime metadata (`uid`, `resourceVersion`, `creationTimestamp`), producing clean redeployable YAML. However, it proved **insufficient as a migration tool** for several reasons:
 
 1. **Cannot migrate PVC data** — exports PVC manifests but not the data inside the volumes.
 2. **Cannot export cluster-scoped resources** — CRDs, ClusterRoles, ClusterRoleBindings, and Namespaces are invisible to Crane.
-3. **Incompatible with Velero's FSB restore** — Velero's Kopia file-level data restore is tied to specific pod names from the backup. Crane-created Deployments spawn pods with different ReplicaSet hashes and names, causing Velero's FSB restore to hang indefinitely waiting for pods that will never appear.
+3. **Incompatible with Velero's FSB (File System Backup) restore** — Velero's Kopia file-level data restore is tied to specific pod names from the backup. Crane-created Deployments spawn pods with different ReplicaSet hashes and names, causing Velero's FSB restore to hang indefinitely waiting for pods that will never appear.
 4. **Cannot run before Velero** — due to point 3, Crane manifests must be applied after the full Velero restore. At that point, all resources already exist on the target cluster, making Crane's output redundant for the migration itself.
 
 **Crane remains useful for**: extracting clean YAML for GitOps onboarding or version control, independently of the migration process. It is not part of the migration playbook.
@@ -432,9 +475,46 @@ curl -sk --connect-to "$ROUTE:443:$NODE_IP:443" -X POST -d "first note on SNO" h
 9. **SCCs are identical**: MicroShift ships the full set of OpenShift SCCs. This is not a migration concern.
 10. **The MicroShift → SNO direction is favorable**: SNO is a superset of MicroShift in API surface. The main practical traps are pod CIDR mismatch, StorageClass names, and Route hostnames — all solvable with pre-restore configuration.
 
+## Migration Alternatives
+
+This experiment used Velero for everything (manifests + data) because the sample app had no prior packaging. For larger or better-packaged applications, other approaches reduce the need for Velero's manifest handling and its associated gotchas (pod CIDR annotations, StorageClass names, stale runtime state).
+
+### Comparison
+
+| Method | Manifests | Data | Environment adaptation | Best for |
+|---|---|---|---|---|
+| **Velero** (this experiment) | Backup + restore | Kopia FSB | Resource modifiers, post-restore patches | Any app, one-off migration, no prior packaging |
+| **Helm** | `helm install` with target values | Velero for PVC data | Values files per environment | Apps with existing Helm charts |
+| **GitOps** (ArgoCD/Flux) | Sync from Git repo | Velero for PVC data | Kustomize overlays or Helm values per cluster | Apps already managed via GitOps |
+| **Operator** | Install operator + apply CR | Operator handles data (if supported) | CR spec adapts to environment | Operator-managed apps |
+| **CI/CD pipeline** | Pipeline deploys from scratch | App rebuilds state | Pipeline config per environment | Stateless or state-reconstructable apps |
+
+### When to use each
+
+**Velero for everything** — the app has no packaging (raw manifests, no chart, no Git repo). Velero is the only option that migrates both manifests and data without requiring the app to be packaged first. This is what the experiment demonstrated. The trade-offs are the gotchas documented in the lessons learned: pod CIDR mismatches, StorageClass naming, stale runtime state on restored pods.
+
+**Helm for manifests + Velero for data** — the app is packaged as a Helm chart. Run `helm install` on SNO with target-specific values (`storageClass: lvms-vg1`, `route.host: auto`). This avoids all the manifest gotchas because the chart renders fresh manifests for the target environment — no stale pod annotations, no StorageClass mismatches, no Route hostname patches. Use Velero only for PVC data migration. This is the sweet spot for most medium-to-large applications.
+
+**GitOps for manifests + Velero for data** — the app is already managed by ArgoCD or Flux pointing at a Git repo. Point the GitOps tool at the SNO cluster, apply the right overlay/values, and let it sync. Data migration is still Velero. The manifests are already version-controlled and environment-aware, so no migration tooling is needed for them.
+
+**Operator-managed** — the app is deployed and managed by a Kubernetes operator. Install the operator on SNO via OperatorHub and apply the CR with target-specific config. The operator reconciles everything. Some operators (like database operators) have built-in backup/restore for data migration, eliminating the need for Velero entirely.
+
+**CI/CD pipeline rebuild** — the app is stateless or can reconstruct its state (database seeds, API sync, event replay). Run the deployment pipeline against SNO. No migration tooling at all. Doesn't work for apps with large persistent state.
+
+### Key insight
+
+The more packaging and automation the app already has, the less Velero is needed for manifests. Velero's unique value is **PVC data migration** — for everything else, the app's existing deployment method (Helm, GitOps, operator, pipeline) handles environment adaptation better because it was designed for it. Velero was designed for backup/restore, not cross-environment deployment.
+
+```
+No packaging       → Velero does everything (demonstrated in this experiment)
+Helm chart         → Helm for manifests + Velero for data
+GitOps / Operator  → Existing tooling for manifests + Velero for data
+Stateless app      → Just redeploy, no migration needed
+```
+
 ## Appendix: Crane for GitOps
 
-If the goal is to extract clean manifests for version control (separately from the migration), Crane can be used independently:
+If the goal is to extract clean manifests for version control (separately from the migration), [Crane](https://github.com/migtools/crane) can be used independently:
 
 ```bash
 crane export -n shift-week-demo
