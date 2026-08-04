@@ -196,7 +196,51 @@ oc get pods -n velero
 velero backup-location get
 ```
 
-For MinIO or non-AWS S3, add `s3ForcePathStyle=true,s3Url=<endpoint>` to `--backup-location-config`.
+### Without cloud S3 (self-hosted)
+
+Velero requires an S3-compatible object store accessible from both clusters. Without AWS/GCP/Azure, deploy a self-hosted S3-compatible server backed by local disk or NFS.
+
+**Options**:
+
+| Project | License | Notes |
+|---|---|---|
+| **SeaweedFS** | Apache 2.0 | S3 gateway mode, single container, active upstream |
+| **CloudServer** (Zenko/Scality) | Apache 2.0 | Filesystem backend, S3-compatible |
+| **Garage** | AGPL 3.0 | Designed for small/edge deployments |
+
+**SeaweedFS example** (single container, stores on NFS or local path):
+
+```bash
+docker run -d --name seaweedfs -p 8333:8333 -v /mnt/nfs/velero-s3:/data \
+  chrislusf/seaweedfs server -s3 -dir=/data
+```
+
+Create the bucket:
+
+```bash
+aws --endpoint-url http://<s3-host>:8333 s3 mb s3://shift-week-migration
+```
+
+**Velero install** is identical to the cloud version — only `--backup-location-config` changes:
+
+```bash
+velero install \
+  --provider aws \
+  --image docker.io/velero/velero:v1.18.2 \
+  --plugins docker.io/velero/velero-plugin-for-aws:v1.11.0 \
+  --bucket shift-week-migration \
+  --secret-file ./credentials-velero \
+  --backup-location-config region=default,s3ForcePathStyle=true,s3Url=http://<s3-host>:8333 \
+  --use-node-agent \
+  --privileged-node-agent \
+  --uploader-type=kopia \
+  --default-volumes-to-fs-backup \
+  --node-agent-configmap=node-agent-config
+```
+
+The credentials file still needs `aws_access_key_id` and `aws_secret_access_key` — SeaweedFS accepts any values by default (no auth), but Velero's AWS plugin requires the file to exist.
+
+The server can run anywhere both clusters can reach: a third VM, one of the cluster nodes, or a container on your workstation.
 
 ## Sample Application
 
