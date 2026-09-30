@@ -141,9 +141,6 @@ spec:
             --db-nb-cluster-local-proto=tcp \
             --no-monitor"
 
-          # Interconnect: each node runs its own standalone NBDB for its own zone.
-          # Nodes do not share a database; zones are stitched via the transit switch.
-
           rm -f /run/ovn/ovnnb_db.sock
 
           echo "$(date -Iseconds) - starting nbdb"
@@ -291,9 +288,6 @@ spec:
             --db-sb-cluster-local-proto=tcp \
             --no-monitor"
 
-          # Interconnect: each node runs its own standalone SBDB for its own zone.
-          # Nodes do not share a database; zones are stitched via the transit switch.
-
           rm -f /run/ovn/ovnsb_db.sock
 
           echo "$(date -Iseconds) - starting sbdb "
@@ -419,8 +413,6 @@ spec:
             set +o allexport
           fi
 
-          # Interconnect: every node runs its own ovnkube-controller to build the
-          # local zone (logical switch, gateway router, flows) against its local DBs.
           # K8S_NODE_IP triggers reconcilation of this daemon when node IP changes
           echo "$(date -Iseconds) - starting ovnkube-master, Node: ${K8S_NODE} IP: ${K8S_NODE_IP}"
 

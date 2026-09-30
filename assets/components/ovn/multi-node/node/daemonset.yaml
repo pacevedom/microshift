@@ -154,9 +154,6 @@ spec:
             # the functionality depends on ip_forwarding being enabled
           fi
 
-          # Interconnect: ovnkube-node connects to the node's own local NB/SB DBs
-          # (default unix sockets); ovn-controller registers the local chassis. Each
-          # node owns its zone, so no cross-node DB addresses are exported here.
           echo "I$(date "+%m%d %H:%M:%S.%N") - ovnkube-node - start ovnkube --init-node ${K8S_NODE}"
           exec /usr/bin/ovnkube \
             --init-node "${K8S_NODE}" \
